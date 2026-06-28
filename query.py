@@ -1,11 +1,25 @@
-from langchain_ollama import OllamaEmbeddings, OllamaLLM
+# from langchain_ollama import OllamaEmbeddings, OllamaLLM
+# from langchain_community.vectorstores import Chroma
+# from langchain_core.prompts import PromptTemplate
+from dotenv import load_dotenv
+load_dotenv()
+import os
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
+from langchain_groq import ChatGroq
 from langchain_core.prompts import PromptTemplate
 
 def query_pdf(question: str):
     # Step 1: Load ChromaDB with same embedding model
-    embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url="http://host.docker.internal:11434")
-    llm = OllamaLLM(model="llama3.2", base_url="http://host.docker.internal:11434")
+    # embeddings = HuggingFaceEmbeddings(model="nomic-embed-text", base_url="http://host.docker.internal:11434")
+    # llm = Groq(model="llama3.2", base_url="http://host.docker.internal:11434")
+    # vectorstore = Chroma(
+    #     persist_directory="./chroma_db",
+    #     embedding_function=embeddings
+    # )
+    embeddings = HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2"
+    )
     vectorstore = Chroma(
         persist_directory="./chroma_db",
         embedding_function=embeddings
@@ -32,13 +46,21 @@ Answer:"""
 
     # Step 5: Send to LLM
     print("Sending to LLM...")
-    llm = OllamaLLM(model="llama3.2")
+    # llm = OllamaLLM(model="llama3.2")
+    llm = ChatGroq(
+        model="llama-3.1-8b-instant",
+        api_key=os.getenv("GROQ_API_KEY")
+    )
     answer = llm.invoke(prompt)
 
     # Step 6: Show answer with sources
     print("\n--- ANSWER ---")
-    print(answer)
-    return answer
+    print(answer.content)
+    print("\n--- SOURCES ---")
+    for chunk in relevant_chunks:
+        print(f"Page {chunk.metadata.get('page', 'unknown')}: {chunk.page_content[:100]}...")
+
+    return answer.content
     
 
 if __name__ == "__main__":

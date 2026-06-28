@@ -1,6 +1,6 @@
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_ollama import OllamaEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 
 def ingest_pdf(pdf_path: str):
@@ -23,7 +23,10 @@ def ingest_pdf(pdf_path: str):
 
     # Step 3: Create embeddings and store in ChromaDB
     print("Creating embeddings and storing in ChromaDB...")
-    embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url="http://host.docker.internal:11434")
+    # embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url="http://host.docker.internal:11434")
+    embeddings = HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2"
+    )
     vectorstore = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,

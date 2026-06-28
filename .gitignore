@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# ChromaDB — generated data
+chroma_db/
+
+# PDF files
+*.pdf
+
+# Environment
+.env
+venv/
+
+# Node
+frontend/node_modules/
+frontend/build/
+
+# OS
+.DS_Store

@@ -4,7 +4,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 import os
-from langchain_community.embeddings import HuggingFaceEmbeddings
+# from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_groq import ChatGroq
 from langchain_core.prompts import PromptTemplate
@@ -17,9 +18,12 @@ def query_pdf(question: str):
     #     persist_directory="./chroma_db",
     #     embedding_function=embeddings
     # )
-    embeddings = HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2"
-    )
+    # embeddings = HuggingFaceEmbeddings(
+    #     model_name="all-MiniLM-L6-v2"
+    # )
+    embeddings = FastEmbedEmbeddings(
+    model_name="BAAI/bge-small-en-v1.5"
+)
     vectorstore = Chroma(
         persist_directory="./chroma_db",
         embedding_function=embeddings

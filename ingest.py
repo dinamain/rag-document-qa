@@ -23,7 +23,7 @@ def ingest_pdf(pdf_path: str):
 
     # Step 3: Create embeddings and store in ChromaDB
     print("Creating embeddings and storing in ChromaDB...")
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
+    embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url="http://host.docker.internal:11434")
     vectorstore = Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,

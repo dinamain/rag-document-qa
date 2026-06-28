@@ -4,7 +4,8 @@ from langchain_core.prompts import PromptTemplate
 
 def query_pdf(question: str):
     # Step 1: Load ChromaDB with same embedding model
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
+    embeddings = OllamaEmbeddings(model="nomic-embed-text", base_url="http://host.docker.internal:11434")
+    llm = OllamaLLM(model="llama3.2", base_url="http://host.docker.internal:11434")
     vectorstore = Chroma(
         persist_directory="./chroma_db",
         embedding_function=embeddings

@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import shutil
 import os
@@ -6,6 +7,13 @@ from ingest import ingest_pdf
 from query import query_pdf
 
 app = FastAPI()
+# CORS — allow React frontend to talk to FastAPI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class QuestionRequest(BaseModel):
     question: str

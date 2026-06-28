@@ -2,7 +2,10 @@
 
 Upload any PDF and ask questions about it. Get accurate AI-powered answers with source citations — without reading the whole document.
 
-Built with LangChain · ChromaDB · Ollama · FastAPI · React · Docker
+**Live API:** https://rag-document-qa-yrtf.onrender.com  
+**API Docs:** https://rag-document-qa-yrtf.onrender.com/docs
+
+Built with LangChain · ChromaDB · FastEmbed · Groq · FastAPI · React · Docker
 
 ---
 
@@ -12,7 +15,7 @@ Most LLMs don't know what's in your private documents. This system solves that u
 
 1. **Upload a PDF** — the document is extracted, chunked, and stored as vector embeddings in ChromaDB
 2. **Ask a question** — your question is embedded and compared against stored chunks using semantic similarity search
-3. **Get an answer** — the most relevant chunks are retrieved and sent to a local LLM (Llama 3.2 via Ollama) which generates an accurate answer with source citation
+3. **Get an answer** — the most relevant chunks are retrieved and sent to Groq (Llama 3.1) which generates an accurate answer with source citation
 
 The LLM never sees the whole document — only the most relevant sections. This keeps answers focused and grounded.
 
@@ -24,14 +27,14 @@ The LLM never sees the whole document — only the most relevant sections. This 
 PDF Upload
   ↓ PyPDF — extract text
   ↓ RecursiveCharacterTextSplitter — chunk with overlap
-  ↓ nomic-embed-text (Ollama) — generate embeddings
+  ↓ FastEmbed (BAAI/bge-small-en-v1.5) — generate embeddings
   ↓ ChromaDB — store vectors + metadata
 
 User Question
-  ↓ nomic-embed-text (Ollama) — embed question
+  ↓ FastEmbed (BAAI/bge-small-en-v1.5) — embed question
   ↓ ChromaDB — similarity search (top-k chunks)
   ↓ LangChain prompt template — build context prompt
-  ↓ Llama 3.2 (Ollama) — generate answer with source citation
+  ↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
 ```
 
 ---
@@ -42,11 +45,13 @@ User Question
 |---|---|
 | Orchestration | LangChain |
 | Vector Database | ChromaDB |
-| Embeddings | nomic-embed-text via Ollama |
-| Local LLM | Llama 3.2 via Ollama |
+| Embeddings | FastEmbed (BAAI/bge-small-en-v1.5) |
+| LLM | Groq (Llama 3.1-8b-instant) |
 | Backend API | FastAPI |
 | Frontend | React |
-| Containerisation | Docker |
+| Containerisation | Docker Compose |
+| CI/CD | GitHub Actions |
+| Deployment | Render |
 
 ---
 
@@ -54,12 +59,19 @@ User Question
 
 ```
 rag-document-qa/
-├── ingest.py          # PDF ingestion pipeline
-├── query.py           # Query and retrieval pipeline
-├── main.py            # FastAPI backend (POST /upload, POST /ask)
+├── ingest.py              # PDF ingestion pipeline
+├── query.py               # Query and retrieval pipeline
+├── main.py                # FastAPI backend (POST /upload, POST /ask)
+├── Dockerfile             # Backend container
+├── docker-compose.yml     # Multi-container orchestration
+├── requirements.txt       # Python dependencies
 ├── frontend/
+│   ├── Dockerfile         # Frontend container
 │   └── src/
-│       └── App.js     # React UI — upload + Q&A
+│       └── App.js         # React UI — upload + Q&A
+├── .github/
+│   └── workflows/
+│       └── ci.yml         # GitHub Actions CI pipeline
 ├── .gitignore
 └── README.md
 ```
@@ -70,41 +82,58 @@ rag-document-qa/
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.12+
 - Node.js
-- [Ollama](https://ollama.com) installed and running
+- Docker Desktop
 
-### 1. Pull required models
-
-```bash
-ollama pull llama3.2
-ollama pull nomic-embed-text
-```
-
-### 2. Install Python dependencies
+### 1. Clone the repo
 
 ```bash
-pip install langchain langchain-community langchain-ollama langchain-text-splitters chromadb fastapi uvicorn pypdf ollama python-multipart
+git clone https://github.com/dinamain/rag-document-qa.git
+cd rag-document-qa
 ```
 
-### 3. Run the FastAPI backend
+### 2. Set up environment variables
+
+Create a `.env` file in the root:
+
+```
+GROQ_API_KEY=your_groq_api_key
+```
+
+Get a free key at https://console.groq.com
+
+### 3. Run with Docker Compose
+
+```bash
+docker-compose up --build
+```
+
+Frontend runs at `http://localhost:3000`  
+Backend API runs at `http://localhost:8000`  
+API docs at `http://localhost:8000/docs`
+
+### 4. Or run locally without Docker
+
+Install Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run the FastAPI backend:
 
 ```bash
 python -m uvicorn main:app --reload
 ```
 
-API runs at `http://localhost:8000`
-Auto-generated docs at `http://localhost:8000/docs`
-
-### 4. Run the React frontend
+Run the React frontend:
 
 ```bash
 cd frontend
 npm install
 npm start
 ```
-
-Frontend runs at `http://localhost:3000`
 
 ---
 
@@ -120,17 +149,20 @@ Frontend runs at `http://localhost:3000`
 
 ## Key Design Decisions
 
-**Why chunk with overlap?**
+**Why chunk with overlap?**  
 Splitting text into fixed chunks risks losing context at boundaries. Overlap ensures sentences that span two chunks remain retrievable in both — no content gets orphaned.
 
-**Why nomic-embed-text instead of the LLM for embeddings?**
-Llama 3.2 doesn't support embeddings directly. nomic-embed-text is a dedicated embedding model — faster, more accurate for semantic search.
+**Why FastEmbed instead of a heavier embedding model?**  
+FastEmbed uses ONNX runtime — no PyTorch dependency, under 130MB, runs efficiently on free-tier cloud servers. Heavier models like sentence-transformers require PyTorch (2GB+) which exceeds Render's free tier RAM limit.
 
-**Why the same embedding model at index and query time?**
+**Why the same embedding model at index and query time?**  
 Embeddings are numerical representations learned by a specific model. Switching models between indexing and querying produces incompatible vectors — similarity search returns garbage. Same model both times, always.
 
-**Why RAG over just asking the LLM?**
+**Why RAG over just asking the LLM?**  
 The LLM was trained on public internet data. Your private PDFs were never part of that training. RAG bridges that gap by retrieving relevant context at query time and giving it to the LLM — no fine-tuning required.
+
+**Why Groq instead of Ollama for deployment?**  
+Ollama runs models locally — perfect for development. For cloud deployment, Groq provides fast, free LLM inference via API without needing to run a model on the server.
 
 ---
 
@@ -139,12 +171,17 @@ The LLM was trained on public internet data. Your private PDFs were never part o
 - Discovered a real retrieval failure mode: with `k=3`, answers about multi-section documents were incomplete. Increasing to `k=6` fixed retrieval across longer documents.
 - Chunk size and overlap are tunable parameters that directly affect answer quality — not just implementation details.
 - FastAPI auto-generates Swagger docs at `/docs` with zero extra work — useful for demonstrating endpoints to stakeholders.
+- Ran into an OOM error on Render's free tier caused by PyTorch being installed as a transitive dependency of `sentence-transformers`. Switched to FastEmbed (ONNX-based) to reduce memory footprint from ~2GB to ~130MB.
+- Docker networking: containers can't reach each other via `localhost` — used Docker service names and `host.docker.internal` to connect services correctly.
 
 ---
 
 ## Deployment
 
-*Coming soon — Docker Compose + GitHub Actions CI/CD + Render deployment*
+**Live API:** https://rag-document-qa-yrtf.onrender.com  
+**API Docs:** https://rag-document-qa-yrtf.onrender.com/docs
+
+Deployed on Render. GitHub Actions runs CI on every push to master — installs dependencies and verifies all imports pass before deployment.
 
 ---
 

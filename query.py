@@ -67,6 +67,7 @@ Answer:"""
     sources = [
     {
         "page": chunk.metadata.get("page", "unknown"),
+        "filename": chunk.metadata.get("filename", "unknown"),
         "text": chunk.page_content[:150]
     }
     for chunk in relevant_chunks

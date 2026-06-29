@@ -3,6 +3,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import FastEmbedEmbeddings
+import os
 
 def ingest_pdf(pdf_path: str):
     # Step 1: Load PDF and extract text
@@ -10,6 +11,10 @@ def ingest_pdf(pdf_path: str):
     loader=PyPDFLoader(pdf_path)
     documents=loader.load()
     print(f"Loaded {len(documents)} pages")
+    # Add filename to metadata of every chunk
+    filename = os.path.basename(pdf_path)
+    for doc in documents:
+        doc.metadata["filename"] = filename
 
     # Step 2: Split into chunks
     print("Splitting into chunks...")
@@ -31,12 +36,14 @@ def ingest_pdf(pdf_path: str):
     embeddings = FastEmbedEmbeddings(
     model_name="BAAI/bge-small-en-v1.5"
 )
-    vectorstore = Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        persist_directory="./chroma_db"
+    # Load existing vectorstore and ADD to it — not overwrite
+    vectorstore = Chroma(
+        persist_directory="./chroma_db",
+        embedding_function=embeddings
     )
-    print("Done! PDF ingested successfully.")
+    vectorstore.add_documents(chunks)
+    print(f"Done! {filename} ingested successfully.")
+
 
 if __name__ == "__main__":
     ingest_pdf("test.pdf")

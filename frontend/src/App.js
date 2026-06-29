@@ -81,7 +81,7 @@ function App() {
         background: "#e8e8e8",
         fontSize: "0.85em"
       }}>
-        <strong>Page {source.page + 1}</strong>: {source.text}...
+        <strong>{source.filename} — Page {source.page + 1}</strong>: {source.text}...
       </div>
     ))}
   </div>

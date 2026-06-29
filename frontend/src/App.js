@@ -8,13 +8,10 @@ function App() {
   const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Handle PDF upload
   const handleUpload = async () => {
     if (!file) return alert("Please select a PDF first");
-    
     const formData = new FormData();
     formData.append("file", file);
-    
     setUploadStatus("Uploading...");
     const response = await fetch("http://localhost:8000/upload", {
       method: "POST",
@@ -24,12 +21,11 @@ function App() {
     setUploadStatus(data.message);
   };
 
-  // Handle question
   const handleAsk = async () => {
     if (!question) return alert("Please type a question");
-    
     setLoading(true);
     setAnswer("");
+    setSources([]);
     const response = await fetch("http://localhost:8000/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -42,51 +38,190 @@ function App() {
   };
 
   return (
-    <div style={{ maxWidth: "700px", margin: "50px auto", fontFamily: "Arial" }}>
-      <h1>RAG Document Q&A</h1>
+    <div style={{
+      maxWidth: "750px",
+      margin: "40px auto",
+      fontFamily: "'Segoe UI', Arial, sans-serif",
+      padding: "0 20px",
+      color: "#1a1a2e"
+    }}>
+      {/* Header */}
+      <div style={{
+        textAlign: "center",
+        marginBottom: "32px"
+      }}>
+        <h1 style={{
+          fontSize: "28px",
+          fontWeight: "700",
+          color: "#1a1a2e",
+          margin: "0 0 8px 0"
+        }}>📄 RAG Document Q&A</h1>
+        <p style={{ color: "#666", margin: 0, fontSize: "14px" }}>
+          Upload a PDF and ask questions about it
+        </p>
+      </div>
 
       {/* Upload Section */}
-      <div style={{ marginBottom: "30px" }}>
-        <h2>Upload PDF</h2>
-        <input type="file" accept=".pdf" onChange={(e) => setFile(e.target.files[0])} />
-        <button onClick={handleUpload} style={{ marginLeft: "10px" }}>Upload</button>
-        {uploadStatus && <p style={{ color: "green" }}>{uploadStatus}</p>}
+      <div style={{
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: "12px",
+        padding: "24px",
+        marginBottom: "20px",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+      }}>
+        <h2 style={{ fontSize: "16px", fontWeight: "600", margin: "0 0 16px 0" }}>
+          Upload PDF
+        </h2>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <input
+            type="file"
+            accept=".pdf"
+            onChange={(e) => setFile(e.target.files[0])}
+            style={{ fontSize: "14px", flex: 1 }}
+          />
+          <button
+            onClick={handleUpload}
+            style={{
+              background: "#4f46e5",
+              color: "#fff",
+              border: "none",
+              borderRadius: "8px",
+              padding: "8px 20px",
+              fontSize: "14px",
+              fontWeight: "600",
+              cursor: "pointer"
+            }}
+          >
+            Upload
+          </button>
+        </div>
+        {uploadStatus && (
+          <p style={{
+            margin: "12px 0 0 0",
+            fontSize: "14px",
+            color: uploadStatus.includes("successfully") ? "#16a34a" : "#666"
+          }}>
+            {uploadStatus.includes("successfully") ? "✅ " : ""}{uploadStatus}
+          </p>
+        )}
       </div>
 
       {/* Question Section */}
-      <div>
-        <h2>Ask a Question</h2>
-        <input
-          type="text"
-          placeholder="Ask something about the document..."
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          style={{ width: "80%", padding: "8px" }}
-        />
-        <button onClick={handleAsk} style={{ marginLeft: "10px" }}>Ask</button>
-        {loading && <p>Thinking...</p>}
-        {answer && (
-          <div style={{ marginTop: "20px", padding: "15px", background: "#f0f0f0" }}>
-            <h3>Answer:</h3>
-            <p>{answer}</p>
-          </div>
-        )}
-        {sources.length > 0 && (
-  <div style={{ marginTop: "15px" }}>
-    <h4>Sources:</h4>
-    {sources.map((source, index) => (
-      <div key={index} style={{ 
-        padding: "8px", 
-        marginBottom: "8px", 
-        background: "#e8e8e8",
-        fontSize: "0.85em"
+      <div style={{
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: "12px",
+        padding: "24px",
+        marginBottom: "20px",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
       }}>
-        <strong>{source.filename} — Page {source.page + 1}</strong>: {source.text}...
+        <h2 style={{ fontSize: "16px", fontWeight: "600", margin: "0 0 16px 0" }}>
+          Ask a Question
+        </h2>
+        <div style={{ display: "flex", gap: "12px" }}>
+          <input
+            type="text"
+            placeholder="Ask something about the document..."
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleAsk()}
+            style={{
+              flex: 1,
+              padding: "10px 14px",
+              fontSize: "14px",
+              border: "1px solid #e2e8f0",
+              borderRadius: "8px",
+              outline: "none"
+            }}
+          />
+          <button
+            onClick={handleAsk}
+            style={{
+              background: "#4f46e5",
+              color: "#fff",
+              border: "none",
+              borderRadius: "8px",
+              padding: "10px 24px",
+              fontSize: "14px",
+              fontWeight: "600",
+              cursor: "pointer"
+            }}
+          >
+            Ask
+          </button>
+        </div>
+        {loading && (
+          <p style={{ margin: "12px 0 0 0", color: "#666", fontSize: "14px" }}>
+            ⏳ Thinking...
+          </p>
+        )}
       </div>
-    ))}
-  </div>
-)}
-      </div>
+
+      {/* Answer Section */}
+      {answer && (
+        <div style={{
+          background: "#fff",
+          border: "1px solid #e2e8f0",
+          borderRadius: "12px",
+          padding: "24px",
+          marginBottom: "20px",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+        }}>
+          <h2 style={{ fontSize: "16px", fontWeight: "600", margin: "0 0 12px 0" }}>
+            Answer
+          </h2>
+          <div style={{
+            borderTop: "1px solid #e2e8f0",
+            paddingTop: "16px",
+            fontSize: "15px",
+            lineHeight: "1.7",
+            color: "#1a1a2e"
+          }}>
+            {answer}
+          </div>
+        </div>
+      )}
+
+      {/* Sources Section */}
+      {sources.length > 0 && (
+        <div style={{
+          background: "#fff",
+          border: "1px solid #e2e8f0",
+          borderRadius: "12px",
+          padding: "24px",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.08)"
+        }}>
+          <h2 style={{ fontSize: "16px", fontWeight: "600", margin: "0 0 16px 0" }}>
+            Retrieved Context
+          </h2>
+          {sources.map((source, index) => (
+            <div key={index} style={{
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+              borderRadius: "8px",
+              padding: "12px 16px",
+              marginBottom: "10px"
+            }}>
+              <div style={{
+                fontSize: "13px",
+                fontWeight: "600",
+                color: "#4f46e5",
+                marginBottom: "6px"
+              }}>
+                📄 {source.filename} (Page {source.page + 1})
+              </div>
+              <div style={{
+                fontSize: "13px",
+                color: "#555",
+                lineHeight: "1.5"
+              }}>
+                {source.text}...
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

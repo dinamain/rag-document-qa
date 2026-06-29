@@ -64,7 +64,15 @@ Answer:"""
     for chunk in relevant_chunks:
         print(f"Page {chunk.metadata.get('page', 'unknown')}: {chunk.page_content[:100]}...")
 
-    return answer.content
+    sources = [
+    {
+        "page": chunk.metadata.get("page", "unknown"),
+        "text": chunk.page_content[:150]
+    }
+    for chunk in relevant_chunks
+]
+
+    return {"answer": answer.content, "sources": sources}
     
 
 if __name__ == "__main__":

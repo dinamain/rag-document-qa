@@ -39,5 +39,5 @@ def root():
 
 @app.post("/ask")
 async def ask_question(request: QuestionRequest):
-    answer = query_pdf(request.question)
-    return {"answer": answer}
+    result = query_pdf(request.question)
+    return {"answer": result["answer"], "sources": result["sources"]}

@@ -5,6 +5,7 @@ function App() {
   const [uploadStatus, setUploadStatus] = useState("");
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
+  const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(false);
 
   // Handle PDF upload
@@ -36,6 +37,7 @@ function App() {
     });
     const data = await response.json();
     setAnswer(data.answer);
+    setSources(data.sources || []);
     setLoading(false);
   };
 
@@ -69,6 +71,21 @@ function App() {
             <p>{answer}</p>
           </div>
         )}
+        {sources.length > 0 && (
+  <div style={{ marginTop: "15px" }}>
+    <h4>Sources:</h4>
+    {sources.map((source, index) => (
+      <div key={index} style={{ 
+        padding: "8px", 
+        marginBottom: "8px", 
+        background: "#e8e8e8",
+        fontSize: "0.85em"
+      }}>
+        <strong>Page {source.page + 1}</strong>: {source.text}...
+      </div>
+    ))}
+  </div>
+)}
       </div>
     </div>
   );

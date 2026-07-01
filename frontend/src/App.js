@@ -13,7 +13,7 @@ function App() {
     const formData = new FormData();
     formData.append("file", file);
     setUploadStatus("Uploading...");
-    const response = await fetch("http://localhost:8000/upload", {
+    const response = await fetch("https://rag-document-qa-yrtf.onrender.com/upload", {
       method: "POST",
       body: formData,
     });
@@ -26,7 +26,7 @@ function App() {
     setLoading(true);
     setAnswer("");
     setSources([]);
-    const response = await fetch("http://localhost:8000/ask", {
+    const response = await fetch("https://rag-document-qa-yrtf.onrender.com/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question }),

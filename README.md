@@ -193,7 +193,7 @@ Without deduplication, re-uploading the same PDF accumulates duplicate chunks in
 
 **Live API:** https://rag-document-qa-yrtf.onrender.com  
 **API Docs:** https://rag-document-qa-yrtf.onrender.com/docs
-
+**Frontend**: https://rag-document-qa-sandy.vercel.app
 Deployed on Render. GitHub Actions runs CI on every push to master — installs dependencies and verifies all imports pass before deployment.
 
 ---

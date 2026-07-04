@@ -13,16 +13,20 @@ def query_pdf(question: str, vectorstore=None):
         vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
     retriever = vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs={"k": 5}
+        search_kwargs={"k": 6}
     )
     relevant_chunks = retriever.invoke(question)
 
     context = "\n\n".join([chunk.page_content for chunk in relevant_chunks])
 
-    prompt = f"""You are a helpful assistant answering questions about a document.
-Use the context below to answer fully and directly.
-Only say "I don't know based on the document" if the topic is completely absent from the context.
-Do not add disclaimers about what the context doesn't cover.
+    prompt = f"""You are a precise assistant that answers questions strictly from the provided document context.
+
+Rules:
+- Answer ONLY using information explicitly stated in the context below
+- If the context contains a partial answer, give that partial answer and state clearly what is missing
+- If the context contains no relevant information at all, say exactly: "This topic is not covered in the document."
+- Do NOT infer, assume, or use outside knowledge
+- Do NOT speculate about what the document might say elsewhere
 
 Context:
 {context}

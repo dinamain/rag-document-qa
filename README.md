@@ -1,9 +1,11 @@
+RAG Document Q&A System
 # RAG Document Q&A System
 
 Upload any PDF and ask questions about it. Get accurate AI-powered answers with source citations — without reading the whole document.
 
-**Live API:** https://rag-document-qa-yrtf.onrender.com  
+**Live API:** https://rag-document-qa-yrtf.onrender.com
 **API Docs:** https://rag-document-qa-yrtf.onrender.com/docs
+**Frontend:** https://rag-document-qa-sandy.vercel.app
 
 Built with LangChain · ChromaDB · FastEmbed · Groq · FastAPI · React · Docker
 
@@ -23,19 +25,22 @@ The LLM never sees the whole document — only the most relevant sections. This 
 
 ## Architecture
 
-```
 PDF Upload
-  ↓ PyPDF — extract text
-  ↓ RecursiveCharacterTextSplitter — chunk with overlap
-  ↓ FastEmbed (BAAI/bge-small-en-v1.5) — generate embeddings
-  ↓ ChromaDB — store vectors + metadata
+↓ PyPDF — extract text
+↓ clean_text() — fix words broken across line boundaries
+↓ RecursiveCharacterTextSplitter — chunk with overlap
+↓ Prepend [Source: filename, page X] header to each chunk
+↓ FastEmbed (BAAI/bge-small-en-v1.5) — generate embeddings
+↓ ChromaDB — store vectors + metadata
 
 User Question
-  ↓ FastEmbed (BAAI/bge-small-en-v1.5) — embed question
-  ↓ ChromaDB — similarity search (top-k chunks)
-  ↓ LangChain prompt template — build context prompt
-  ↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
-```
+↓ Query rewriting (LLM) — reformulate into a cleaner search query
+↓ FastEmbed — embed rewritten query
+↓ ChromaDB — similarity search, scoped to filename, wide candidate pool (k=15)
+↓ Cross-encoder re-ranking (ms-marco-MiniLM-L-6-v2) — re-score against ORIGINAL question
+↓ LangChain prompt template — build strict, grounded context prompt
+↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
+↓ Answer verification (LLM) — three-way check: fully supported / honestly partial / unsupported
 
 ---
 
@@ -45,36 +50,35 @@ User Question
 |---|---|
 | Orchestration | LangChain |
 | Vector Database | ChromaDB |
-| Embeddings | FastEmbed (BAAI/bge-small-en-v1.5) |
+| Embeddings | FastEmbed (BAAI/bge-small-en-v1.5, ONNX runtime) |
+| Re-ranking | sentence-transformers (cross-encoder/ms-marco-MiniLM-L-6-v2) |
 | LLM | Groq (Llama 3.1-8b-instant) |
 | Backend API | FastAPI |
 | Frontend | React |
 | Containerisation | Docker Compose |
 | CI/CD | GitHub Actions |
-| Deployment | Render |
+| Deployment | Render (API) · Vercel (frontend) |
 
 ---
 
 ## Project Structure
 
-```
 rag-document-qa/
-├── ingest.py              # PDF ingestion pipeline
-├── query.py               # Query and retrieval pipeline
-├── main.py                # FastAPI backend (POST /upload, POST /ask)
-├── Dockerfile             # Backend container
-├── docker-compose.yml     # Multi-container orchestration
-├── requirements.txt       # Python dependencies
+├── ingest.py # PDF ingestion: load, clean, chunk, header, embed, store
+├── query.py # Query pipeline: rewrite, retrieve, re-rank, generate, verify
+├── main.py # FastAPI backend (POST /upload, POST /ask)
+├── test_ingest.py # Manual ingestion test script
+├── test_query.py # Manual query test script
+├── ab_test.py # A/B comparison scripts (e.g. query rewriting on/off)
+├── Dockerfile # Backend container
+├── docker-compose.yml # Multi-container orchestration
+├── requirements.txt # Python dependencies
 ├── frontend/
-│   ├── Dockerfile         # Frontend container
-│   └── src/
-│       └── App.js         # React UI — upload + Q&A
-├── .github/
-│   └── workflows/
-│       └── ci.yml         # GitHub Actions CI pipeline
+│ ├── Dockerfile
+│ └── src/App.js # React UI — upload + Q&A
+├── .github/workflows/ci.yml # GitHub Actions CI pipeline
 ├── .gitignore
 └── README.md
-```
 
 ---
 
@@ -96,10 +100,8 @@ cd rag-document-qa
 ### 2. Set up environment variables
 
 Create a `.env` file in the root:
-
-```
 GROQ_API_KEY=your_groq_api_key
-```
+
 
 Get a free key at https://console.groq.com
 
@@ -109,25 +111,16 @@ Get a free key at https://console.groq.com
 docker-compose up --build
 ```
 
-Frontend runs at `http://localhost:3000`  
-Backend API runs at `http://localhost:8000`  
-API docs at `http://localhost:8000/docs`
+Frontend: `http://localhost:3000`
+Backend API: `http://localhost:8000`
+API docs: `http://localhost:8000/docs`
 
 ### 4. Or run locally without Docker
 
-Install Python dependencies:
-
 ```bash
 pip install -r requirements.txt
-```
-
-Run the FastAPI backend:
-
-```bash
 python -m uvicorn main:app --reload
 ```
-
-Run the React frontend:
 
 ```bash
 cd frontend
@@ -149,52 +142,68 @@ npm start
 
 ## Key Design Decisions
 
-**Why chunk with overlap?**  
-Splitting text into fixed chunks risks losing context at boundaries. Overlap ensures sentences that span two chunks remain retrievable in both — no content gets orphaned.
+**Why chunk with overlap?**
+Splitting text into fixed chunks risks losing context at boundaries. Overlap ensures sentences that span two chunks remain retrievable in both.
 
-**Why FastEmbed instead of a heavier embedding model?**  
-FastEmbed uses ONNX runtime — no PyTorch dependency, under 130MB, runs efficiently on free-tier cloud servers. Heavier models like sentence-transformers require PyTorch (2GB+) which exceeds Render's free tier RAM limit.
+**Why FastEmbed instead of a heavier embedding model?**
+FastEmbed uses ONNX runtime — no PyTorch dependency, under 130MB, runs on free-tier cloud servers. Heavier models requiring PyTorch (2GB+) exceed Render's free-tier RAM limit.
 
-**Why the same embedding model at index and query time?**  
-Embeddings are numerical representations learned by a specific model. Switching models between indexing and querying produces incompatible vectors — similarity search returns garbage. Same model both times, always.
+**Why the same embedding model at index and query time?**
+Embeddings from different models are not comparable — switching models between indexing and querying produces incompatible vectors and garbage similarity scores.
 
-**Why RAG over just asking the LLM?**  
-The LLM was trained on public internet data. Your private PDFs were never part of that training. RAG bridges that gap by retrieving relevant context at query time and giving it to the LLM — no fine-tuning required.
+**Why RAG over just asking the LLM?**
+The LLM was trained on public data; it has never seen your private PDFs. RAG retrieves relevant context at query time instead of requiring fine-tuning.
 
-**Why Groq instead of Ollama for deployment?**  
-Ollama runs models locally — perfect for development. For cloud deployment, Groq provides fast, free LLM inference via API without needing to run a model on the server.
+**Why Groq instead of a local model for deployment?**
+Local models are great for development but need a GPU-backed server to run in production. Groq provides fast, free LLM inference via API without hosting a model.
 
-
-**Why switch from `langchain_community.vectorstores.Chroma` to `langchain_chroma`?**
-The community package is deprecated as of LangChain 0.2.9 and has connection lifecycle bugs on Windows — specifically, it doesn't release SQLite file locks cleanly between requests. Migrating to `langchain-chroma` (the maintained package) resolved persistent `PermissionError: [WinError 32]` errors on upload.
+**Why `langchain_chroma` instead of `langchain_community.vectorstores.Chroma`?**
+The community package is deprecated and has connection lifecycle bugs on Windows — it doesn't release SQLite file locks cleanly between requests. Migrating resolved persistent `PermissionError: [WinError 32]` errors on upload.
 
 **Why share a single vectorstore instance across requests?**
-Creating a new ChromaDB connection per request caused SQLite lock conflicts on Windows when upload and query requests interleaved. Initialising one `Chroma` instance at FastAPI startup and passing it into both `ingest_pdf` and `query_pdf` ensures a single managed connection with no lock contention.
+Creating a new ChromaDB connection per request caused SQLite lock conflicts when upload and query requests interleaved. One `Chroma` instance, initialized at FastAPI startup, avoids lock contention.
 
 **Why deduplicate by filename on upload?**
-Without deduplication, re-uploading the same PDF accumulates duplicate chunks in ChromaDB, polluting similarity search results. On each upload, existing chunks matching that filename are deleted before new ones are added — keeping the vectorstore clean across multiple sessions.
+Without deduplication, re-uploading the same PDF accumulates duplicate chunks, polluting similarity search. Existing chunks matching a filename are deleted before new ones are added.
+
+**Why scope retrieval by filename?**
+Similarity search originally ran across every ingested document — a question about one PDF could silently retrieve chunks from an unrelated one. Metadata filtering on `filename` scopes retrieval correctly; verified in both directions (right document → full answer, unrelated document → correctly "not covered").
+
+**Why rewrite queries before retrieval?**
+Casual, vague questions embed differently than formally-worded document text. A/B testing found this makes no measurable difference on keyword-dense documents (like a resume) but produces real retrieval gains on jargon-heavy content, where phrasing divergence from the source document is larger.
+
+**Why re-rank with a cross-encoder after vector search?**
+Bi-encoders (used for the initial vector search) embed the query and each chunk separately and compare vectors — fast but comparatively imprecise. A cross-encoder scores the query and a candidate chunk jointly, capturing real interaction between them — more accurate, but too slow to run against an entire vectorstore, so it only re-scores the top candidates from the first pass.
+
+**Why three-way answer verification instead of binary?**
+An initial binary supported/not-supported verifier incorrectly flagged an answer that correctly stated what it knew *and* honestly noted what the context didn't cover — punishing intended, honest behavior. Reclassifying into `FULLY_SUPPORTED` / `PARTIALLY_SUPPORTED_AND_HONEST` / `UNSUPPORTED` fixed this.
+
+**Why force `temperature=0`?**
+The same question, asked twice, sometimes produced different answers — traced to non-deterministic sampling in the query-rewrite step, which changed which chunks got retrieved. Setting temperature to 0 across all pipeline LLM calls made outputs consistent across repeated identical requests (verified with back-to-back runs).
 
 ---
 
 ## What I Learned Building This
 
-- Discovered a real retrieval failure mode: with `k=3`, answers about multi-section documents were incomplete. Increasing to `k=6` fixed retrieval across longer documents.
-- Chunk size and overlap are tunable parameters that directly affect answer quality — not just implementation details.
-- FastAPI auto-generates Swagger docs at `/docs` with zero extra work — useful for demonstrating endpoints to stakeholders.
-- Ran into an OOM error on Render's free tier caused by PyTorch being installed as a transitive dependency of `sentence-transformers`. Switched to FastEmbed (ONNX-based) to reduce memory footprint from ~2GB to ~130MB.
-- Docker networking: containers can't reach each other via `localhost` — used Docker service names and `host.docker.internal` to connect services correctly.
-- Debugged a Windows-specific SQLite file lock (`PermissionError: [WinError 32]`) caused by ChromaDB holding connections open between requests — resolved by sharing a single vectorstore instance initialised at startup.
-- Migrated from deprecated `langchain_community` Chroma to `langchain_chroma` package after discovering connection lifecycle issues in production.
-- Implemented filename-based deduplication to prevent chunk accumulation across multiple upload sessions.
-- Discovered MMR retrieval hurts performance on focused academic PDFs by over-diversifying results — plain similarity search with k=5 outperforms it for this use case.
+- **k=3 gave incomplete answers on multi-section PDFs; k=6 fixed it** — retrieval breadth is a real, tunable lever, not just an implementation detail.
+- **MMR hurt performance on focused academic PDFs** by over-diversifying results; plain similarity search outperformed it for this use case.
+- **An OOM crash on Render's free tier** traced to PyTorch being pulled in as a transitive dependency of a heavier embedding library — switching to FastEmbed's ONNX runtime cut memory from ~2GB to ~130MB.
+- **A Windows-specific SQLite file lock** (`PermissionError: [WinError 32]`) was caused by ChromaDB holding connections open between requests — fixed by sharing one vectorstore instance initialized at startup.
+- **A PDF text-extraction bug** silently broke words across line boundaries (`"Assessm\nent"` instead of `"Assessment"`) — fixed with a cleanup regex before chunking, discovered while diagnosing weak cross-encoder scores.
+- **Re-ranking scores are phrasing-sensitive** — the same chunk scored -9.8 for a casually-phrased question and +3.3 for a more document-aligned phrasing, showing query rewriting and re-ranking are not independent stages.
+- **Chunk ordering in the context window affects correctness, not just retrieval quality** — the same three retrieved chunks, in a different order, flipped a correct answer into an incorrect "not covered" response (a real, observed instance of LLM position bias / "lost in the middle").
+- **Binary groundedness checks can penalize honesty** — an answer that correctly hedged on missing information was wrongly flagged as unsupported by a binary verifier; three-way classification fixed this.
+- **LLM sampling non-determinism affects retrieval, not just wording** — identical questions produced different rewritten queries, different retrieved chunks, and different final answers, until `temperature=0` was applied across the pipeline.
+
 ---
 
 ## Deployment
 
-**Live API:** https://rag-document-qa-yrtf.onrender.com  
+**Live API:** https://rag-document-qa-yrtf.onrender.com
 **API Docs:** https://rag-document-qa-yrtf.onrender.com/docs
-**Frontend**: https://rag-document-qa-sandy.vercel.app
-Deployed on Render. GitHub Actions runs CI on every push to master — installs dependencies and verifies all imports pass before deployment.
+**Frontend:** https://rag-document-qa-sandy.vercel.app
+
+Deployed on Render (API) and Vercel (frontend). GitHub Actions runs CI on every push to master.
 
 ---
 

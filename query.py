@@ -7,15 +7,96 @@ from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
 CHROMA_DIR = "./chroma_db"
 
-def query_pdf(question: str, vectorstore=None):
+
+def rewrite_query(question: str, llm) -> str:
+    prompt = f"""Rewrite the following user question into a clear, specific search query 
+optimized for finding relevant text in a document via semantic search. 
+Keep it concise. Do not answer the question — only rewrite it as a search query.
+Return ONLY the rewritten query, nothing else.
+
+User question: {question}
+
+Rewritten query:"""
+
+    result = llm.invoke(prompt)
+    return result.content.strip().strip('"')
+
+
+from sentence_transformers import CrossEncoder
+
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+
+def rerank_chunks(question: str, chunks: list, top_k: int = 3) -> list:
+    pairs = [[question, chunk.page_content] for chunk in chunks]
+    scores = reranker.predict(pairs)
+
+    scored_chunks = list(zip(chunks, scores))
+    scored_chunks.sort(key=lambda x: x[1], reverse=True)
+
+    print("\n--- RERANK SCORES ---")
+    for chunk, score in scored_chunks:
+        print(f"{score:.4f} | page {chunk.metadata.get('page')}: {chunk.page_content[:60]}")
+
+    return [chunk for chunk, score in scored_chunks[:top_k]]
+
+
+def verify_answer(question: str, context: str, answer: str, llm) -> dict:
+    verification_prompt = f"""You are a strict fact-checker. Classify the ANSWER below relative to the CONTEXT.
+
+Respond in exactly this format:
+STATUS: one of FULLY_SUPPORTED, PARTIALLY_SUPPORTED_AND_HONEST, or UNSUPPORTED
+REASON: one short sentence explaining why
+
+Definitions:
+- FULLY_SUPPORTED: every claim in the answer is directly backed by the context.
+- PARTIALLY_SUPPORTED_AND_HONEST: the answer's claims are backed by the context, AND it correctly 
+  acknowledges what the context does not cover. This is a GOOD outcome, not a failure.
+- UNSUPPORTED: the answer states something as fact that the context does not actually support, 
+  without acknowledging the gap. This is a hallucination.
+
+CONTEXT:
+{context}
+
+ANSWER:
+{answer}
+"""
+    result = llm.invoke(verification_prompt)
+    text = result.content.strip()
+
+    status_line = text.lower().split("reason:")[0]
+    is_hallucination = "unsupported" in status_line and "partially" not in status_line
+
+    return {"hallucinated": is_hallucination, "raw": text}
+
+def query_pdf(question: str, vectorstore=None, filename: str = None):
     if vectorstore is None:
         embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
         vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
+
+    llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"), temperature=0)
+
+    rewritten_question = rewrite_query(question, llm)
+    print(f"Original: {question}")
+    print(f"Rewritten: {rewritten_question}")
+
+    search_kwargs = {"k": 15}
+    if filename:
+        search_kwargs["filter"] = {"filename": filename}
+
     retriever = vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs={"k": 6}
+        search_kwargs=search_kwargs
     )
-    relevant_chunks = retriever.invoke(question)
+    initial_chunks = retriever.invoke(rewritten_question)
+    print("\n--- INITIAL RETRIEVAL (before re-rank) ---")
+    for c in initial_chunks:
+        print(f"page {c.metadata.get('page')}: {c.page_content[:80]}")
+
+    relevant_chunks = rerank_chunks(question, initial_chunks, top_k=6)
+    print("\n--- AFTER RE-RANK ---")
+    for c in relevant_chunks:
+        print(f"page {c.metadata.get('page')}: {c.page_content[:80]}")
 
     context = "\n\n".join([chunk.page_content for chunk in relevant_chunks])
 
@@ -35,9 +116,14 @@ Question: {question}
 
 Answer:"""
 
-    llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"))
     answer = llm.invoke(prompt)
 
+    verification = verify_answer(question, context, answer.content, llm)
+    print(f"\n--- VERIFICATION ---\n{verification['raw']}")
+
+    final_answer = answer.content
+    if verification["hallucinated"]:
+        final_answer += "\n\n⚠️ Note: parts of this answer could not be fully verified against the source document."
     sources = [
         {
             "page": chunk.metadata.get("page", "unknown"),
@@ -47,4 +133,4 @@ Answer:"""
         for chunk in relevant_chunks[:3]
     ]
 
-    return {"answer": answer.content, "sources": sources}
+    return {"answer": final_answer, "sources": sources}

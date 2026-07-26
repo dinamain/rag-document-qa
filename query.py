@@ -26,6 +26,24 @@ from sentence_transformers import CrossEncoder
 
 reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
+from langchain_community.retrievers import BM25Retriever
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_core.documents import Document
+
+
+def get_bm25_retriever(vectorstore, filename: str = None, k: int = 15):
+    """Build a BM25 keyword retriever over the same chunks stored in ChromaDB."""
+    where_filter = {"filename": filename} if filename else None
+    raw = vectorstore.get(where=where_filter, include=["documents", "metadatas"])
+
+    docs = [
+        Document(page_content=text, metadata=meta)
+        for text, meta in zip(raw["documents"], raw["metadatas"])
+    ]
+
+    bm25 = BM25Retriever.from_documents(docs)
+    bm25.k = k
+    return bm25
 
 def rerank_chunks(question: str, chunks: list, top_k: int = 3) -> list:
     pairs = [[question, chunk.page_content] for chunk in chunks]
@@ -84,11 +102,23 @@ def query_pdf(question: str, vectorstore=None, filename: str = None):
     if filename:
         search_kwargs["filter"] = {"filename": filename}
 
-    retriever = vectorstore.as_retriever(
+    vector_retriever = vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs=search_kwargs
+        search_kwargs=search_kwargs   # your existing k=15 + filename filter
     )
-    initial_chunks = retriever.invoke(rewritten_question)
+
+    # bm25_retriever = get_bm25_retriever(vectorstore, filename=filename, k=15)
+
+    # hybrid_retriever = EnsembleRetriever(
+    #     retrievers=[vector_retriever, bm25_retriever],
+    #     weights=[0.5, 0.5]
+    # )
+    hybrid_retriever = EnsembleRetriever(
+        retrievers=[vector_retriever],   # bm25_retriever removed for this test
+        weights=[1.0]
+    )
+
+    initial_chunks = hybrid_retriever.invoke(rewritten_question)
     print("\n--- INITIAL RETRIEVAL (before re-rank) ---")
     for c in initial_chunks:
         print(f"page {c.metadata.get('page')}: {c.page_content[:80]}")

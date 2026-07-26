@@ -34,14 +34,13 @@ PDF Upload
 ↓ ChromaDB — store vectors + metadata
 
 User Question
-↓ Query rewriting (LLM) — reformulate into a cleaner search query
-↓ FastEmbed — embed rewritten query
-↓ ChromaDB — similarity search, scoped to filename, wide candidate pool (k=15)
-↓ Cross-encoder re-ranking (ms-marco-MiniLM-L-6-v2) — re-score against ORIGINAL question
-↓ LangChain prompt template — build strict, grounded context prompt
-↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
-↓ Answer verification (LLM) — three-way check: fully supported / honestly partial / unsupported
-
+  ↓ Query rewriting (LLM) — reformulate into a cleaner search query
+  ↓ FastEmbed — embed rewritten query
+  ↓ Hybrid retrieval: ChromaDB vector search (k=15) + BM25 keyword search (k=15), merged via Reciprocal Rank Fusion
+  ↓ Cross-encoder re-ranking (ms-marco-MiniLM-L-6-v2) — re-score against ORIGINAL question
+  ↓ LangChain prompt template — build strict, grounded context prompt
+  ↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
+  ↓ Answer verification (LLM) — three-way check: fully supported / honestly partial / unsupported
 ---
 
 ## Tech Stack
@@ -57,7 +56,7 @@ User Question
 | Frontend | React |
 | Containerisation | Docker Compose |
 | CI/CD | GitHub Actions |
-| Deployment | Render (API) · Vercel (frontend) |
+| Deployment | Render (API) · Vercel (frontend) | Keyword Retrieval | BM25 (rank_bm25, via langchain_community) |
 
 ---
 
@@ -181,6 +180,8 @@ An initial binary supported/not-supported verifier incorrectly flagged an answer
 **Why force `temperature=0`?**
 The same question, asked twice, sometimes produced different answers — traced to non-deterministic sampling in the query-rewrite step, which changed which chunks got retrieved. Setting temperature to 0 across all pipeline LLM calls made outputs consistent across repeated identical requests (verified with back-to-back runs).
 
+**Why add hybrid (BM25 + vector) search on top of cross-encoder re-ranking?**
+Pure vector similarity is comparatively weak at exact lexical matches — proper nouns, course codes, specific numbers — since embeddings capture semantic meaning, not exact string matches. Hybrid search merges vector search with BM25 keyword matching via Reciprocal Rank Fusion, so a chunk either method considers relevant surfaces near the top even if the other method underweights it.
 ---
 
 ## What I Learned Building This
@@ -194,7 +195,7 @@ The same question, asked twice, sometimes produced different answers — traced 
 - **Chunk ordering in the context window affects correctness, not just retrieval quality** — the same three retrieved chunks, in a different order, flipped a correct answer into an incorrect "not covered" response (a real, observed instance of LLM position bias / "lost in the middle").
 - **Binary groundedness checks can penalize honesty** — an answer that correctly hedged on missing information was wrongly flagged as unsupported by a binary verifier; three-way classification fixed this.
 - **LLM sampling non-determinism affects retrieval, not just wording** — identical questions produced different rewritten queries, different retrieved chunks, and different final answers, until `temperature=0` was applied across the pipeline.
-
+- **Hybrid search's contribution depends on what else is already in the pipeline** — across four controlled tests (a distinctive acronym, an exact numeric mark table twice, and an alphanumeric course code), BM25 measurably improved initial retrieval ranking every time it had something to contribute — in the hardest case, moving the target chunk from position 6 to position 3 in the candidate pool — but never changed the final answer, because a wide k=15 candidate pool plus cross-encoder re-ranking was consistently able to recover the correct chunk regardless. This showed me that a technique can be correctly implemented and genuinely doing its job, while a *different* part of the pipeline (re-ranking, candidate pool width) is absorbing the gap it's meant to close — a more precise finding than either "it helped" or "it didn't."
 ---
 
 ## Deployment

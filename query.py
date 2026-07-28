@@ -22,9 +22,9 @@ Rewritten query:"""
     return result.content.strip().strip('"')
 
 
-from sentence_transformers import CrossEncoder
+from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+reranker = TextCrossEncoder(model_name="Xenova/ms-marco-MiniLM-L-6-v2")
 
 from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
@@ -45,9 +45,10 @@ def get_bm25_retriever(vectorstore, filename: str = None, k: int = 15):
     bm25.k = k
     return bm25
 
+
 def rerank_chunks(question: str, chunks: list, top_k: int = 3) -> list:
-    pairs = [[question, chunk.page_content] for chunk in chunks]
-    scores = reranker.predict(pairs)
+    documents = [chunk.page_content for chunk in chunks]
+    scores = list(reranker.rerank(question, documents))
 
     scored_chunks = list(zip(chunks, scores))
     scored_chunks.sort(key=lambda x: x[1], reverse=True)
@@ -87,6 +88,7 @@ ANSWER:
 
     return {"hallucinated": is_hallucination, "raw": text}
 
+
 def query_pdf(question: str, vectorstore=None, filename: str = None):
     if vectorstore is None:
         embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
@@ -107,15 +109,11 @@ def query_pdf(question: str, vectorstore=None, filename: str = None):
         search_kwargs=search_kwargs   # your existing k=15 + filename filter
     )
 
-    # bm25_retriever = get_bm25_retriever(vectorstore, filename=filename, k=15)
+    bm25_retriever = get_bm25_retriever(vectorstore, filename=filename, k=15)
 
-    # hybrid_retriever = EnsembleRetriever(
-    #     retrievers=[vector_retriever, bm25_retriever],
-    #     weights=[0.5, 0.5]
-    # )
     hybrid_retriever = EnsembleRetriever(
-        retrievers=[vector_retriever],   # bm25_retriever removed for this test
-        weights=[1.0]
+        retrievers=[vector_retriever, bm25_retriever],
+        weights=[0.5, 0.5]
     )
 
     initial_chunks = hybrid_retriever.invoke(rewritten_question)

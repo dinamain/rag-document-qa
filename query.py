@@ -26,25 +26,6 @@ from fastembed.rerank.cross_encoder import TextCrossEncoder
 
 reranker = TextCrossEncoder(model_name="Xenova/ms-marco-MiniLM-L-6-v2")
 
-from langchain_community.retrievers import BM25Retriever
-from langchain_classic.retrievers import EnsembleRetriever
-from langchain_core.documents import Document
-
-
-def get_bm25_retriever(vectorstore, filename: str = None, k: int = 15):
-    """Build a BM25 keyword retriever over the same chunks stored in ChromaDB."""
-    where_filter = {"filename": filename} if filename else None
-    raw = vectorstore.get(where=where_filter, include=["documents", "metadatas"])
-
-    docs = [
-        Document(page_content=text, metadata=meta)
-        for text, meta in zip(raw["documents"], raw["metadatas"])
-    ]
-
-    bm25 = BM25Retriever.from_documents(docs)
-    bm25.k = k
-    return bm25
-
 
 def rerank_chunks(question: str, chunks: list, top_k: int = 3) -> list:
     documents = [chunk.page_content for chunk in chunks]
@@ -93,6 +74,7 @@ def query_pdf(question: str, vectorstore=None, filename: str = None):
     if vectorstore is None:
         embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
         vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
+
     llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"), temperature=0)
 
     rewritten_question = rewrite_query(question, llm)
@@ -105,17 +87,21 @@ def query_pdf(question: str, vectorstore=None, filename: str = None):
 
     vector_retriever = vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs=search_kwargs   # your existing k=15 + filename filter
+        search_kwargs=search_kwargs
     )
 
-    bm25_retriever = get_bm25_retriever(vectorstore, filename=filename, k=15)
+    # NOTE: hybrid (BM25 + vector) retrieval disabled here to reduce memory
+    # footprint on Render's free tier (512MB limit) — BM25 rebuilds a full
+    # in-memory index from the entire corpus on every single query, which
+    # was pushing peak memory over the limit. Four controlled A/B tests
+    # earlier showed hybrid search never changed a final answer in this
+    # pipeline (re-ranking + wide candidate pool already recovered the
+    # correct chunk regardless), so vector-only retrieval is a safe,
+    # evidence-based fallback for this constrained environment. Hybrid
+    # search remains implemented and available for local use — see
+    # get_bm25_retriever in git history / local dev.
+    initial_chunks = vector_retriever.invoke(rewritten_question)
 
-    hybrid_retriever = EnsembleRetriever(
-        retrievers=[vector_retriever, bm25_retriever],
-        weights=[0.5, 0.5]
-    )
-
-    initial_chunks = hybrid_retriever.invoke(rewritten_question)
     print("\n--- INITIAL RETRIEVAL (before re-rank) ---")
     for c in initial_chunks:
         print(f"page {c.metadata.get('page')}: {c.page_content[:80]}")

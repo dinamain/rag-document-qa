@@ -9,7 +9,6 @@ CHROMA_DIR = "./chroma_db"
 
 
 def clean_text(text: str) -> str:
-    # Fix words broken across a newline, e.g. "Assessm\nent" -> "Assessment"
     text = re.sub(r'(\w)-?\n(\w)', r'\1\2', text)
     return text
 

@@ -7,15 +7,16 @@ from ingest import ingest_pdf
 from query import query_pdf
 from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_chroma import Chroma
+
 CHROMA_DIR = "./chroma_db"
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-    "http://localhost:3000",
-    "https://rag-document-qa-sandy.vercel.app"
-],
+        "http://localhost:3000",
+        "https://rag-document-qa-sandy.vercel.app"
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -36,7 +37,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     temp_path = f"./{file.filename}"
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    ingest_pdf(temp_path, vectorstore=vectorstore)  # pass it in
+    ingest_pdf(temp_path, vectorstore=vectorstore)
     os.remove(temp_path)
     return {"message": f"{file.filename} ingested successfully"}
 

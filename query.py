@@ -93,7 +93,6 @@ def query_pdf(question: str, vectorstore=None, filename: str = None):
     if vectorstore is None:
         embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
         vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
-
     llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"), temperature=0)
 
     rewritten_question = rewrite_query(question, llm)

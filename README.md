@@ -1,11 +1,37 @@
-RAG Document Q&A System
 # RAG Document Q&A System
 
 Upload any PDF and ask questions about it. Get accurate AI-powered answers with source citations — without reading the whole document.
 
-**Live API:** https://rag-document-qa-yrtf.onrender.com
-**API Docs:** https://rag-document-qa-yrtf.onrender.com/docs
-**Frontend:** https://rag-document-qa-sandy.vercel.app
+**Repo:** https://github.com/dinamain/rag-document-qa
+**Status:** Feature-complete — full pipeline built and tested. No live demo (see Known Limitations).
+
+Built with LangChain · ChromaDB · FastEmbed · Groq · FastAPI · React · Docker
+
+---
+
+## What It Does
+
+Most LLMs don't know what's in your private documents. This system solves that using RAG (Retrieval-Augmented Generation):
+
+1. **Upload a PDF** — the document is extracted, chunked, and stored as vector embeddings in ChromaDB
+2. **Ask a question** — your question is embedded and compared against stored chunks using semantic similarity search
+3. **Get an answer** — the most relevant chunks are retrieved and sent to Groq (Llama 3.1) which generates an accurate answer with source citation
+
+The LLM never sees the whole document — only the most relevant sections. This keeps answers focused and grounded.
+
+---
+
+## Architecture
+
+Here's the fully corrected README, with all three issues fixed — live links removed consistently (per the "GitHub only, no live demo" decision), the reranker line updated to reflect the FastEmbed swap, and the broken table row split correctly:
+
+markdown
+# RAG Document Q&A System
+
+Upload any PDF and ask questions about it. Get accurate AI-powered answers with source citations — without reading the whole document.
+
+**Repo:** https://github.com/dinamain/rag-document-qa
+**Status:** Feature-complete — full pipeline built and tested. No live demo (see Known Limitations).
 
 Built with LangChain · ChromaDB · FastEmbed · Groq · FastAPI · React · Docker
 
@@ -34,50 +60,14 @@ PDF Upload
 ↓ ChromaDB — store vectors + metadata
 
 User Question
-  ↓ Query rewriting (LLM) — reformulate into a cleaner search query
-  ↓ FastEmbed — embed rewritten query
-  ↓ Hybrid retrieval: ChromaDB vector search (k=15) + BM25 keyword search (k=15), merged via Reciprocal Rank Fusion
-  ↓ Cross-encoder re-ranking (ms-marco-MiniLM-L-6-v2) — re-score against ORIGINAL question
-  ↓ LangChain prompt template — build strict, grounded context prompt
-  ↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
-  ↓ Answer verification (LLM) — three-way check: fully supported / honestly partial / unsupported
----
+↓ Query rewriting (LLM) — reformulate into a cleaner search query
+↓ FastEmbed — embed rewritten query
+↓ Hybrid retrieval: ChromaDB vector search (k=15) + BM25 keyword search (k=15), merged via Reciprocal Rank Fusion
+↓ Cross-encoder re-ranking (FastEmbed ONNX, Xenova/ms-marco-MiniLM-L-6-v2) — re-score against ORIGINAL question
+↓ LangChain prompt template — build strict, grounded context prompt
+↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
+↓ Answer verification (LLM) — three-way check: fully supported / honestly partial / unsupported
 
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Orchestration | LangChain |
-| Vector Database | ChromaDB |
-| Embeddings | FastEmbed (BAAI/bge-small-en-v1.5, ONNX runtime) |
-| Re-ranking | sentence-transformers (cross-encoder/ms-marco-MiniLM-L-6-v2) |
-| LLM | Groq (Llama 3.1-8b-instant) |
-| Backend API | FastAPI |
-| Frontend | React |
-| Containerisation | Docker Compose |
-| CI/CD | GitHub Actions |
-| Deployment | Render (API) · Vercel (frontend) | Keyword Retrieval | BM25 (rank_bm25, via langchain_community) |
-
----
-
-## Project Structure
-
-rag-document-qa/
-├── ingest.py # PDF ingestion: load, clean, chunk, header, embed, store
-├── query.py # Query pipeline: rewrite, retrieve, re-rank, generate, verify
-├── main.py # FastAPI backend (POST /upload, POST /ask)
-├── test_ingest.py # Manual ingestion test script
-├── test_query.py # Manual query test script
-├── ab_test.py # A/B comparison scripts (e.g. query rewriting on/off)
-├── Dockerfile # Backend container
-├── docker-compose.yml # Multi-container orchestration
-├── requirements.txt # Python dependencies
-├── frontend/
-│ ├── Dockerfile
-│ └── src/App.js # React UI — upload + Q&A
-├── .github/workflows/ci.yml # GitHub Actions CI pipeline
-├── .gitignore
-└── README.md
 
 ---
 
@@ -99,8 +89,8 @@ cd rag-document-qa
 ### 2. Set up environment variables
 
 Create a `.env` file in the root:
-GROQ_API_KEY=your_groq_api_key
 
+GROQ_API_KEY=your_groq_api_key
 
 Get a free key at https://console.groq.com
 
@@ -174,6 +164,9 @@ Casual, vague questions embed differently than formally-worded document text. A/
 **Why re-rank with a cross-encoder after vector search?**
 Bi-encoders (used for the initial vector search) embed the query and each chunk separately and compare vectors — fast but comparatively imprecise. A cross-encoder scores the query and a candidate chunk jointly, capturing real interaction between them — more accurate, but too slow to run against an entire vectorstore, so it only re-scores the top candidates from the first pass.
 
+**Why switch the re-ranker from `sentence-transformers` to FastEmbed's ONNX cross-encoder?**
+The original re-ranker used `sentence-transformers`, which pulls in a full PyTorch install alongside FastEmbed's ONNX embeddings — running two heavy runtimes together caused an out-of-memory crash on Render's free tier. Switching to FastEmbed's own ONNX-based cross-encoder (`Xenova/ms-marco-MiniLM-L-6-v2`, the same underlying model, ONNX-converted) fixed the memory issue. Verified the swap didn't change behavior by re-running the same test questions and confirming identical re-rank scores to four decimal places — the ONNX conversion introduced no measurable numerical drift.
+
 **Why three-way answer verification instead of binary?**
 An initial binary supported/not-supported verifier incorrectly flagged an answer that correctly stated what it knew *and* honestly noted what the context didn't cover — punishing intended, honest behavior. Reclassifying into `FULLY_SUPPORTED` / `PARTIALLY_SUPPORTED_AND_HONEST` / `UNSUPPORTED` fixed this.
 
@@ -182,13 +175,14 @@ The same question, asked twice, sometimes produced different answers — traced 
 
 **Why add hybrid (BM25 + vector) search on top of cross-encoder re-ranking?**
 Pure vector similarity is comparatively weak at exact lexical matches — proper nouns, course codes, specific numbers — since embeddings capture semantic meaning, not exact string matches. Hybrid search merges vector search with BM25 keyword matching via Reciprocal Rank Fusion, so a chunk either method considers relevant surfaces near the top even if the other method underweights it.
+
 ---
 
 ## What I Learned Building This
 
 - **k=3 gave incomplete answers on multi-section PDFs; k=6 fixed it** — retrieval breadth is a real, tunable lever, not just an implementation detail.
 - **MMR hurt performance on focused academic PDFs** by over-diversifying results; plain similarity search outperformed it for this use case.
-- **An OOM crash on Render's free tier** traced to PyTorch being pulled in as a transitive dependency of a heavier embedding library — switching to FastEmbed's ONNX runtime cut memory from ~2GB to ~130MB.
+- **An OOM crash on Render's free tier** traced to PyTorch being pulled in as a transitive dependency of a heavier embedding library — switching to FastEmbed's ONNX runtime cut memory from ~2GB to ~130MB. A second, later OOM — from adding a PyTorch-based cross-encoder reranker alongside FastEmbed's ONNX embeddings — was fixed the same way, by switching the reranker to FastEmbed's own ONNX cross-encoder.
 - **A Windows-specific SQLite file lock** (`PermissionError: [WinError 32]`) was caused by ChromaDB holding connections open between requests — fixed by sharing one vectorstore instance initialized at startup.
 - **A PDF text-extraction bug** silently broke words across line boundaries (`"Assessm\nent"` instead of `"Assessment"`) — fixed with a cleanup regex before chunking, discovered while diagnosing weak cross-encoder scores.
 - **Re-ranking scores are phrasing-sensitive** — the same chunk scored -9.8 for a casually-phrased question and +3.3 for a more document-aligned phrasing, showing query rewriting and re-ranking are not independent stages.
@@ -196,42 +190,23 @@ Pure vector similarity is comparatively weak at exact lexical matches — proper
 - **Binary groundedness checks can penalize honesty** — an answer that correctly hedged on missing information was wrongly flagged as unsupported by a binary verifier; three-way classification fixed this.
 - **LLM sampling non-determinism affects retrieval, not just wording** — identical questions produced different rewritten queries, different retrieved chunks, and different final answers, until `temperature=0` was applied across the pipeline.
 - **Hybrid search's contribution depends on what else is already in the pipeline** — across four controlled tests (a distinctive acronym, an exact numeric mark table twice, and an alphanumeric course code), BM25 measurably improved initial retrieval ranking every time it had something to contribute — in the hardest case, moving the target chunk from position 6 to position 3 in the candidate pool — but never changed the final answer, because a wide k=15 candidate pool plus cross-encoder re-ranking was consistently able to recover the correct chunk regardless. This showed me that a technique can be correctly implemented and genuinely doing its job, while a *different* part of the pipeline (re-ranking, candidate pool width) is absorbing the gap it's meant to close — a more precise finding than either "it helped" or "it didn't."
+- **Every added pipeline stage has a resource cost somewhere, not just a speed one** — hybrid search, re-ranking, and running two ONNX models simultaneously each add real memory or latency overhead; a technique being correct doesn't mean it's free to deploy.
 
 ---
 
 ## Known Limitations
 
-**No live demo — deployed via GitHub only.** This project was deployed on Render's free 
-tier during development, but the full pipeline (hybrid search, cross-encoder re-ranking, 
-and two simultaneously-loaded ONNX models for embeddings + re-ranking) consistently 
-exceeds the free tier's 512MB memory limit, causing repeated out-of-memory crashes and 
-restarts. Rather than strip working, well-tested features (hybrid search, re-ranking) 
-just to fit a memory-constrained free tier, this project is presented as source code with 
-full local setup instructions below — see "Getting Started." A production deployment 
-would use a higher-memory tier (Render Starter, $7/month, or equivalent) to run the full 
-pipeline reliably.
+**No live demo — deployed via GitHub only.** This project was deployed on Render's free tier during development, but the full pipeline (hybrid search, cross-encoder re-ranking, and two simultaneously-loaded ONNX models for embeddings + re-ranking) consistently exceeds the free tier's 512MB memory limit, causing repeated out-of-memory crashes and restarts. Rather than strip working, well-tested features (hybrid search, re-ranking) just to fit a memory-constrained free tier, this project is presented as source code with full local setup instructions above — see "Getting Started." A production deployment would use a higher-memory tier (Render Starter, $7/month, or equivalent) to run the full pipeline reliably.
 
-**BM25 index is rebuilt on every query, not persisted.** The hybrid search implementation 
-calls `vectorstore.get(...)` to pull all matching chunks from ChromaDB and rebuilds an 
-in-memory `BM25Retriever` from scratch on every single query. This is fine at portfolio 
-scale (tens of chunks per document) but would not hold up at real scale — at 100k+ 
-documents, re-fetching and re-tokenizing the entire corpus per query becomes a real 
-bottleneck. The fix: cache the BM25 index in memory at startup and only rebuild it on 
-ingestion, not on every query. At genuine production scale, this would be replaced with a 
-disk-persisted, incrementally-updatable keyword search engine (Elasticsearch, OpenSearch) 
-rather than an in-memory rebuild.
+**BM25 index is rebuilt on every query, not persisted.** The hybrid search implementation calls `vectorstore.get(...)` to pull all matching chunks from ChromaDB and rebuilds an in-memory `BM25Retriever` from scratch on every single query. This is fine at portfolio scale (tens of chunks per document) but would not hold up at real scale — at 100k+ documents, re-fetching and re-tokenizing the entire corpus per query becomes a real bottleneck. The fix: cache the BM25 index in memory at startup and only rebuild it on ingestion, not on every query. At genuine production scale, this would be replaced with a disk-persisted, incrementally-updatable keyword search engine (Elasticsearch, OpenSearch) rather than an in-memory rebuild.
 
-**Non-transactional ingestion.** Re-ingesting a document deletes its existing chunks 
-before confirming the new ones have loaded successfully — an ingestion crash mid-re-ingest 
-can leave a document's chunks permanently missing. A production version would stage new 
-chunks, verify them, then delete the old ones only after the new ones are confirmed.
+**Non-transactional ingestion.** Re-ingesting a document deletes its existing chunks before confirming the new ones have loaded successfully — an ingestion crash mid-re-ingest can leave a document's chunks permanently missing. A production version would stage new chunks, verify them, then delete the old ones only after the new ones are confirmed.
 
 ---
+
 ## Deployment
 
-**Live API:** https://rag-document-qa-yrtf.onrender.com
-**API Docs:** https://rag-document-qa-yrtf.onrender.com/docs
-**Frontend:** https://rag-document-qa-sandy.vercel.app
+This project was tested on Render (API) and Vercel (frontend) during development. See **Known Limitations** above for why no live demo link is provided.
 
 Deployed on Render (API) and Vercel (frontend). GitHub Actions runs CI on every push to master.
 

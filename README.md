@@ -23,51 +23,67 @@ The LLM never sees the whole document — only the most relevant sections. This 
 
 ## Architecture
 
-Here's the fully corrected README, with all three issues fixed — live links removed consistently (per the "GitHub only, no live demo" decision), the reranker line updated to reflect the FastEmbed swap, and the broken table row split correctly:
-
-markdown
-# RAG Document Q&A System
-
-Upload any PDF and ask questions about it. Get accurate AI-powered answers with source citations — without reading the whole document.
-
-**Repo:** https://github.com/dinamain/rag-document-qa
-**Status:** Feature-complete — full pipeline built and tested. No live demo (see Known Limitations).
-
-Built with LangChain · ChromaDB · FastEmbed · Groq · FastAPI · React · Docker
-
----
-
-## What It Does
-
-Most LLMs don't know what's in your private documents. This system solves that using RAG (Retrieval-Augmented Generation):
-
-1. **Upload a PDF** — the document is extracted, chunked, and stored as vector embeddings in ChromaDB
-2. **Ask a question** — your question is embedded and compared against stored chunks using semantic similarity search
-3. **Get an answer** — the most relevant chunks are retrieved and sent to Groq (Llama 3.1) which generates an accurate answer with source citation
-
-The LLM never sees the whole document — only the most relevant sections. This keeps answers focused and grounded.
-
----
-
-## Architecture
-
+```
 PDF Upload
-↓ PyPDF — extract text
-↓ clean_text() — fix words broken across line boundaries
-↓ RecursiveCharacterTextSplitter — chunk with overlap
-↓ Prepend [Source: filename, page X] header to each chunk
-↓ FastEmbed (BAAI/bge-small-en-v1.5) — generate embeddings
-↓ ChromaDB — store vectors + metadata
+  ↓ PyPDF — extract text
+  ↓ clean_text() — fix words broken across line boundaries
+  ↓ RecursiveCharacterTextSplitter — chunk with overlap
+  ↓ Prepend [Source: filename, page X] header to each chunk
+  ↓ FastEmbed (BAAI/bge-small-en-v1.5) — generate embeddings
+  ↓ ChromaDB — store vectors + metadata
 
 User Question
-↓ Query rewriting (LLM) — reformulate into a cleaner search query
-↓ FastEmbed — embed rewritten query
-↓ Hybrid retrieval: ChromaDB vector search (k=15) + BM25 keyword search (k=15), merged via Reciprocal Rank Fusion
-↓ Cross-encoder re-ranking (FastEmbed ONNX, Xenova/ms-marco-MiniLM-L-6-v2) — re-score against ORIGINAL question
-↓ LangChain prompt template — build strict, grounded context prompt
-↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
-↓ Answer verification (LLM) — three-way check: fully supported / honestly partial / unsupported
+  ↓ Query rewriting (LLM) — reformulate into a cleaner search query
+  ↓ FastEmbed — embed rewritten query
+  ↓ Vector retrieval (ChromaDB similarity search, k=15)
+      Note: hybrid retrieval (BM25 + vector via Reciprocal Rank Fusion) was
+      implemented and A/B tested (see Key Design Decisions) but was removed
+      from the active pipeline to reduce memory footprint — vector-only
+      retrieval is the current path
+  ↓ Cross-encoder re-ranking (FastEmbed ONNX, Xenova/ms-marco-MiniLM-L-6-v2) — re-score against ORIGINAL question, top 6
+  ↓ LangChain prompt template — build strict, grounded context prompt
+  ↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
+  ↓ Answer verification (LLM) — three-way check: fully supported / honestly partial / unsupported
+```
 
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Orchestration | LangChain |
+| Vector Database | ChromaDB |
+| Embeddings | FastEmbed (BAAI/bge-small-en-v1.5, ONNX runtime) |
+| Re-ranking | FastEmbed (Xenova/ms-marco-MiniLM-L-6-v2, ONNX runtime) |
+| LLM | Groq (Llama 3.1-8b-instant) |
+| Backend API | FastAPI |
+| Frontend | React |
+| Containerisation | Docker Compose |
+| CI/CD | GitHub Actions |
+
+---
+
+## Project Structure
+
+```
+rag-document-qa/
+├── ingest.py                  # PDF ingestion: load, clean, chunk, header, embed, store
+├── query.py                   # Query pipeline: rewrite, retrieve, re-rank, generate, verify
+├── main.py                    # FastAPI backend (POST /upload, POST /ask)
+├── test_ingest.py             # Manual ingestion test script
+├── test_query.py              # Manual query test script
+├── ab_test.py                 # A/B comparison scripts (e.g. query rewriting on/off)
+├── Dockerfile                 # Backend container
+├── docker-compose.yml         # Multi-container orchestration
+├── requirements.txt           # Python dependencies
+├── frontend/
+│   ├── Dockerfile
+│   └── src/App.js             # React UI — upload + Q&A
+├── .github/workflows/ci.yml   # GitHub Actions CI pipeline
+├── .gitignore
+└── README.md
+```
 
 ---
 
@@ -90,7 +106,9 @@ cd rag-document-qa
 
 Create a `.env` file in the root:
 
+```
 GROQ_API_KEY=your_groq_api_key
+```
 
 Get a free key at https://console.groq.com
 
@@ -173,8 +191,8 @@ An initial binary supported/not-supported verifier incorrectly flagged an answer
 **Why force `temperature=0`?**
 The same question, asked twice, sometimes produced different answers — traced to non-deterministic sampling in the query-rewrite step, which changed which chunks got retrieved. Setting temperature to 0 across all pipeline LLM calls made outputs consistent across repeated identical requests (verified with back-to-back runs).
 
-**Why add hybrid (BM25 + vector) search on top of cross-encoder re-ranking?**
-Pure vector similarity is comparatively weak at exact lexical matches — proper nouns, course codes, specific numbers — since embeddings capture semantic meaning, not exact string matches. Hybrid search merges vector search with BM25 keyword matching via Reciprocal Rank Fusion, so a chunk either method considers relevant surfaces near the top even if the other method underweights it.
+**Why build hybrid (BM25 + vector) search, then remove it from the active pipeline?**
+Pure vector similarity is comparatively weak at exact lexical matches — proper nouns, course codes, specific numbers — since embeddings capture semantic meaning, not exact string matches. Hybrid search (vector + BM25 keyword matching merged via Reciprocal Rank Fusion) was built and A/B tested to close that gap. Across four controlled tests it measurably improved *initial retrieval ranking* every time it had something to contribute. But it never changed the *final answer*, because a wide k=15 candidate pool plus cross-encoder re-ranking was already recovering the correct chunk regardless — and BM25 rebuilding a full in-memory index on every query pushed peak memory over Render's free-tier 512MB limit. Given no measurable answer-quality gain and a real memory cost, hybrid retrieval was removed from the active query path; vector-only retrieval + re-ranking is what runs today. The implementation remains recoverable from git history for a higher-memory deployment.
 
 ---
 
@@ -189,16 +207,16 @@ Pure vector similarity is comparatively weak at exact lexical matches — proper
 - **Chunk ordering in the context window affects correctness, not just retrieval quality** — the same three retrieved chunks, in a different order, flipped a correct answer into an incorrect "not covered" response (a real, observed instance of LLM position bias / "lost in the middle").
 - **Binary groundedness checks can penalize honesty** — an answer that correctly hedged on missing information was wrongly flagged as unsupported by a binary verifier; three-way classification fixed this.
 - **LLM sampling non-determinism affects retrieval, not just wording** — identical questions produced different rewritten queries, different retrieved chunks, and different final answers, until `temperature=0` was applied across the pipeline.
-- **Hybrid search's contribution depends on what else is already in the pipeline** — across four controlled tests (a distinctive acronym, an exact numeric mark table twice, and an alphanumeric course code), BM25 measurably improved initial retrieval ranking every time it had something to contribute — in the hardest case, moving the target chunk from position 6 to position 3 in the candidate pool — but never changed the final answer, because a wide k=15 candidate pool plus cross-encoder re-ranking was consistently able to recover the correct chunk regardless. This showed me that a technique can be correctly implemented and genuinely doing its job, while a *different* part of the pipeline (re-ranking, candidate pool width) is absorbing the gap it's meant to close — a more precise finding than either "it helped" or "it didn't."
+- **A technique can work correctly and still be the wrong choice for the deployment target** — hybrid search measurably improved retrieval ranking in isolation, but a different part of the pipeline (wide candidate pool + re-ranking) was already absorbing the gap it closed, and it cost more memory than the free tier allowed. Building and testing a feature is a separate question from whether it earns its keep in production.
 - **Every added pipeline stage has a resource cost somewhere, not just a speed one** — hybrid search, re-ranking, and running two ONNX models simultaneously each add real memory or latency overhead; a technique being correct doesn't mean it's free to deploy.
 
 ---
 
 ## Known Limitations
 
-**No live demo — deployed via GitHub only.** This project was deployed on Render's free tier during development, but the full pipeline (hybrid search, cross-encoder re-ranking, and two simultaneously-loaded ONNX models for embeddings + re-ranking) consistently exceeds the free tier's 512MB memory limit, causing repeated out-of-memory crashes and restarts. Rather than strip working, well-tested features (hybrid search, re-ranking) just to fit a memory-constrained free tier, this project is presented as source code with full local setup instructions above — see "Getting Started." A production deployment would use a higher-memory tier (Render Starter, $7/month, or equivalent) to run the full pipeline reliably.
+**No live demo — deployed via GitHub only.** This project was deployed on Render's free tier during development, but the full pipeline (cross-encoder re-ranking plus embeddings, two ONNX models loaded simultaneously) pushes close to the free tier's 512MB memory limit, and hybrid BM25 search specifically would exceed it (see above — this is why it was removed from the active pipeline). Rather than strip working, well-tested code just to fit a memory-constrained free tier, this project is presented as source code with full local setup instructions above — see "Getting Started." A production deployment would use a higher-memory tier (Render Starter, $7/month, or equivalent) to run the full pipeline, including hybrid search, reliably.
 
-**BM25 index is rebuilt on every query, not persisted.** The hybrid search implementation calls `vectorstore.get(...)` to pull all matching chunks from ChromaDB and rebuilds an in-memory `BM25Retriever` from scratch on every single query. This is fine at portfolio scale (tens of chunks per document) but would not hold up at real scale — at 100k+ documents, re-fetching and re-tokenizing the entire corpus per query becomes a real bottleneck. The fix: cache the BM25 index in memory at startup and only rebuild it on ingestion, not on every query. At genuine production scale, this would be replaced with a disk-persisted, incrementally-updatable keyword search engine (Elasticsearch, OpenSearch) rather than an in-memory rebuild.
+**BM25 index (when reintroduced) would be rebuilt on every query, not persisted.** The hybrid search implementation (recoverable from git history) called `vectorstore.get(...)` to pull all matching chunks from ChromaDB and rebuild an in-memory `BM25Retriever` from scratch on every single query. This is fine at portfolio scale (tens of chunks per document) but would not hold up at real scale — at 100k+ documents, re-fetching and re-tokenizing the entire corpus per query becomes a real bottleneck. The fix: cache the BM25 index in memory at startup and only rebuild it on ingestion, not on every query. At genuine production scale, this would be replaced with a disk-persisted, incrementally-updatable keyword search engine (Elasticsearch, OpenSearch) rather than an in-memory rebuild.
 
 **Non-transactional ingestion.** Re-ingesting a document deletes its existing chunks before confirming the new ones have loaded successfully — an ingestion crash mid-re-ingest can leave a document's chunks permanently missing. A production version would stage new chunks, verify them, then delete the old ones only after the new ones are confirmed.
 
@@ -206,9 +224,9 @@ Pure vector similarity is comparatively weak at exact lexical matches — proper
 
 ## Deployment
 
-This project was tested on Render (API) and Vercel (frontend) during development. See **Known Limitations** above for why no live demo link is provided.
+This project was deployed and tested on Render (API) and Vercel (frontend) during development — the code and configuration are proven to work end-to-end. See **Known Limitations** above for why no permanent live demo link is kept up.
 
-Deployed on Render (API) and Vercel (frontend). GitHub Actions runs CI on every push to master.
+GitHub Actions runs CI on every push to master.
 
 ---
 

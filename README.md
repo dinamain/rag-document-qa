@@ -196,8 +196,37 @@ Pure vector similarity is comparatively weak at exact lexical matches — proper
 - **Binary groundedness checks can penalize honesty** — an answer that correctly hedged on missing information was wrongly flagged as unsupported by a binary verifier; three-way classification fixed this.
 - **LLM sampling non-determinism affects retrieval, not just wording** — identical questions produced different rewritten queries, different retrieved chunks, and different final answers, until `temperature=0` was applied across the pipeline.
 - **Hybrid search's contribution depends on what else is already in the pipeline** — across four controlled tests (a distinctive acronym, an exact numeric mark table twice, and an alphanumeric course code), BM25 measurably improved initial retrieval ranking every time it had something to contribute — in the hardest case, moving the target chunk from position 6 to position 3 in the candidate pool — but never changed the final answer, because a wide k=15 candidate pool plus cross-encoder re-ranking was consistently able to recover the correct chunk regardless. This showed me that a technique can be correctly implemented and genuinely doing its job, while a *different* part of the pipeline (re-ranking, candidate pool width) is absorbing the gap it's meant to close — a more precise finding than either "it helped" or "it didn't."
+
 ---
 
+## Known Limitations
+
+**No live demo — deployed via GitHub only.** This project was deployed on Render's free 
+tier during development, but the full pipeline (hybrid search, cross-encoder re-ranking, 
+and two simultaneously-loaded ONNX models for embeddings + re-ranking) consistently 
+exceeds the free tier's 512MB memory limit, causing repeated out-of-memory crashes and 
+restarts. Rather than strip working, well-tested features (hybrid search, re-ranking) 
+just to fit a memory-constrained free tier, this project is presented as source code with 
+full local setup instructions below — see "Getting Started." A production deployment 
+would use a higher-memory tier (Render Starter, $7/month, or equivalent) to run the full 
+pipeline reliably.
+
+**BM25 index is rebuilt on every query, not persisted.** The hybrid search implementation 
+calls `vectorstore.get(...)` to pull all matching chunks from ChromaDB and rebuilds an 
+in-memory `BM25Retriever` from scratch on every single query. This is fine at portfolio 
+scale (tens of chunks per document) but would not hold up at real scale — at 100k+ 
+documents, re-fetching and re-tokenizing the entire corpus per query becomes a real 
+bottleneck. The fix: cache the BM25 index in memory at startup and only rebuild it on 
+ingestion, not on every query. At genuine production scale, this would be replaced with a 
+disk-persisted, incrementally-updatable keyword search engine (Elasticsearch, OpenSearch) 
+rather than an in-memory rebuild.
+
+**Non-transactional ingestion.** Re-ingesting a document deletes its existing chunks 
+before confirming the new ones have loaded successfully — an ingestion crash mid-re-ingest 
+can leave a document's chunks permanently missing. A production version would stage new 
+chunks, verify them, then delete the old ones only after the new ones are confirmed.
+
+---
 ## Deployment
 
 **Live API:** https://rag-document-qa-yrtf.onrender.com

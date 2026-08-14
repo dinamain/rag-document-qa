@@ -5,6 +5,10 @@ import os
 from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
+from langchain_community.retrievers import BM25Retriever
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_core.documents import Document
+
 CHROMA_DIR = "./chroma_db"
 
 
@@ -25,6 +29,22 @@ Rewritten query:"""
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 
 reranker = TextCrossEncoder(model_name="Xenova/ms-marco-MiniLM-L-6-v2")
+
+
+def get_bm25_retriever(vectorstore, filename: str = None, k: int = 15):
+    """Build a BM25 keyword retriever over the same chunks stored in ChromaDB.
+    Currently unused in query_pdf() -- kept available, see note below."""
+    where_filter = {"filename": filename} if filename else None
+    raw = vectorstore.get(where=where_filter, include=["documents", "metadatas"])
+
+    docs = [
+        Document(page_content=text, metadata=meta)
+        for text, meta in zip(raw["documents"], raw["metadatas"])
+    ]
+
+    bm25 = BM25Retriever.from_documents(docs)
+    bm25.k = k
+    return bm25
 
 
 def rerank_chunks(question: str, chunks: list, top_k: int = 3) -> list:
@@ -90,23 +110,24 @@ def query_pdf(question: str, vectorstore=None, filename: str = None):
         search_kwargs=search_kwargs
     )
 
-    # NOTE: hybrid (BM25 + vector) retrieval disabled here to reduce memory
-    # footprint on Render's free tier (512MB limit) — BM25 rebuilds a full
-    # in-memory index from the entire corpus on every single query, which
-    # was pushing peak memory over the limit. Four controlled A/B tests
-    # earlier showed hybrid search never changed a final answer in this
-    # pipeline (re-ranking + wide candidate pool already recovered the
-    # correct chunk regardless), so vector-only retrieval is a safe,
-    # evidence-based fallback for this constrained environment. Hybrid
-    # search remains implemented and available for local use — see
-    # get_bm25_retriever in git history / local dev.
-    initial_chunks = vector_retriever.invoke(rewritten_question)
+    # Hybrid (BM25 + vector) tested again on the 3GPP corpus -- confirmed
+    # identical rerank scores to vector-only (page 579 scored 2.3908 either
+    # way for the AMF test query), consistent with earlier A/B testing.
+    # Reverted to vector-only; get_bm25_retriever() kept available above
+    # if this needs revisiting on a different corpus/question set.
+    hybrid_retriever = EnsembleRetriever(
+        retrievers=[vector_retriever],
+        weights=[1.0]
+    )
 
+    initial_chunks = hybrid_retriever.invoke(rewritten_question)
     print("\n--- INITIAL RETRIEVAL (before re-rank) ---")
     for c in initial_chunks:
         print(f"page {c.metadata.get('page')}: {c.page_content[:80]}")
 
-    relevant_chunks = rerank_chunks(question, initial_chunks, top_k=6)
+    # top_k raised from 6 to 8 -- the correct AMF-definition chunk (page 579)
+    # ranked #7 by score, just outside the old top_k=6 cutoff.
+    relevant_chunks = rerank_chunks(question, initial_chunks, top_k=8)
     print("\n--- AFTER RE-RANK ---")
     for c in relevant_chunks:
         print(f"page {c.metadata.get('page')}: {c.page_content[:80]}")

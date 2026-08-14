@@ -13,7 +13,7 @@ Built with LangChain · ChromaDB · FastEmbed · Groq · FastAPI · React · Doc
 
 Most LLMs don't know what's in your private documents. This system solves that using RAG (Retrieval-Augmented Generation):
 
-1. **Upload a PDF** — the document is extracted, chunked, and stored as vector embeddings in ChromaDB
+1. **Upload a PDF** — the document is extracted (prose and tables handled separately), chunked, and stored as vector embeddings in ChromaDB
 2. **Ask a question** — your question is embedded and compared against stored chunks using semantic similarity search
 3. **Get an answer** — the most relevant chunks are retrieved and sent to Groq (Llama 3.1) which generates an accurate answer with source citation
 
@@ -25,8 +25,10 @@ The LLM never sees the whole document — only the most relevant sections. This 
 
 ```
 PDF Upload
-  ↓ PyPDF — extract text
-  ↓ clean_text() — fix words broken across line boundaries
+  ↓ pdfplumber — extract text; tables detected and converted to markdown
+      separately from prose, so column/row structure survives extraction
+  ↓ clean_text() — fix words broken across line boundaries; strip repeating
+      page headers/footers that otherwise dilute chunk relevance
   ↓ RecursiveCharacterTextSplitter — chunk with overlap
   ↓ Prepend [Source: filename, page X] header to each chunk
   ↓ FastEmbed (BAAI/bge-small-en-v1.5) — generate embeddings
@@ -40,7 +42,7 @@ User Question
       implemented and A/B tested (see Key Design Decisions) but was removed
       from the active pipeline to reduce memory footprint — vector-only
       retrieval is the current path
-  ↓ Cross-encoder re-ranking (FastEmbed ONNX, Xenova/ms-marco-MiniLM-L-6-v2) — re-score against ORIGINAL question, top 6
+  ↓ Cross-encoder re-ranking (FastEmbed ONNX, Xenova/ms-marco-MiniLM-L-6-v2) — re-score against ORIGINAL question, top 8
   ↓ LangChain prompt template — build strict, grounded context prompt
   ↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
   ↓ Answer verification (LLM) — three-way check: fully supported / honestly partial / unsupported
@@ -53,6 +55,7 @@ User Question
 | Layer | Technology |
 |---|---|
 | Orchestration | LangChain |
+| PDF Extraction | pdfplumber (table-aware) |
 | Vector Database | ChromaDB |
 | Embeddings | FastEmbed (BAAI/bge-small-en-v1.5, ONNX runtime) |
 | Re-ranking | FastEmbed (Xenova/ms-marco-MiniLM-L-6-v2, ONNX runtime) |
@@ -68,7 +71,7 @@ User Question
 
 ```
 rag-document-qa/
-├── ingest.py                  # PDF ingestion: load, clean, chunk, header, embed, store
+├── ingest.py                  # PDF ingestion: extract (prose + tables), clean, chunk, header, embed, store
 ├── query.py                   # Query pipeline: rewrite, retrieve, re-rank, generate, verify
 ├── main.py                    # FastAPI backend (POST /upload, POST /ask)
 ├── test_ingest.py             # Manual ingestion test script
@@ -152,6 +155,15 @@ npm start
 **Why chunk with overlap?**
 Splitting text into fixed chunks risks losing context at boundaries. Overlap ensures sentences that span two chunks remain retrievable in both.
 
+**Why pdfplumber instead of plain PyPDF text extraction?**
+Documents with dense tables (parameter tables, field definitions, structured reference data) get scrambled by plain text extraction — cell contents run together and lose their row/column relationships. pdfplumber detects table regions separately from prose, and tables are converted to clean markdown before chunking, preserving structure that plain extraction destroys.
+
+**Why strip repeating page headers/footers before chunking?**
+Documents with a repeating boilerplate header or footer on every page (title, version, page number) end up embedding that near-identical text into nearly every chunk. This dilutes each chunk's semantic distinctiveness, measurably hurting both embedding similarity and cross-encoder re-ranking — verified by comparing retrieval quality before and after stripping the pattern.
+
+**Why re-rank with a cutoff of top 8, not top 6?**
+Testing surfaced a case where the single most relevant chunk for a question was correctly identified as relevant by the cross-encoder, but ranked #7 — just outside a top_k=6 cutoff — causing the final answer to miss it. Widening the cutoff to 8 fixed this without changing retrieval or ranking logic.
+
 **Why FastEmbed instead of a heavier embedding model?**
 FastEmbed uses ONNX runtime — no PyTorch dependency, under 130MB, runs on free-tier cloud servers. Heavier models requiring PyTorch (2GB+) exceed Render's free-tier RAM limit.
 
@@ -192,7 +204,7 @@ An initial binary supported/not-supported verifier incorrectly flagged an answer
 The same question, asked twice, sometimes produced different answers — traced to non-deterministic sampling in the query-rewrite step, which changed which chunks got retrieved. Setting temperature to 0 across all pipeline LLM calls made outputs consistent across repeated identical requests (verified with back-to-back runs).
 
 **Why build hybrid (BM25 + vector) search, then remove it from the active pipeline?**
-Pure vector similarity is comparatively weak at exact lexical matches — proper nouns, course codes, specific numbers — since embeddings capture semantic meaning, not exact string matches. Hybrid search (vector + BM25 keyword matching merged via Reciprocal Rank Fusion) was built and A/B tested to close that gap. Across four controlled tests it measurably improved *initial retrieval ranking* every time it had something to contribute. But it never changed the *final answer*, because a wide k=15 candidate pool plus cross-encoder re-ranking was already recovering the correct chunk regardless — and BM25 rebuilding a full in-memory index on every query pushed peak memory over Render's free-tier 512MB limit. Given no measurable answer-quality gain and a real memory cost, hybrid retrieval was removed from the active query path; vector-only retrieval + re-ranking is what runs today. The implementation remains recoverable from git history for a higher-memory deployment.
+Pure vector similarity is comparatively weak at exact lexical matches — proper nouns, course codes, specific numbers — since embeddings capture semantic meaning, not exact string matches. Hybrid search (vector + BM25 keyword matching merged via Reciprocal Rank Fusion) was built and A/B tested to close that gap. Across multiple controlled tests — including a fresh, separate test on a different, denser technical corpus — it never changed the *final answer*, because a wide k=15 candidate pool plus cross-encoder re-ranking was already recovering the correct chunk regardless. Meanwhile BM25 rebuilding a full in-memory index on every query pushed peak memory over Render's free-tier 512MB limit. Given no measurable answer-quality gain and a real memory cost, hybrid retrieval was removed from the active query path; vector-only retrieval + re-ranking is what runs today. The implementation remains recoverable from git history for a higher-memory deployment.
 
 ---
 
@@ -203,6 +215,9 @@ Pure vector similarity is comparatively weak at exact lexical matches — proper
 - **An OOM crash on Render's free tier** traced to PyTorch being pulled in as a transitive dependency of a heavier embedding library — switching to FastEmbed's ONNX runtime cut memory from ~2GB to ~130MB. A second, later OOM — from adding a PyTorch-based cross-encoder reranker alongside FastEmbed's ONNX embeddings — was fixed the same way, by switching the reranker to FastEmbed's own ONNX cross-encoder.
 - **A Windows-specific SQLite file lock** (`PermissionError: [WinError 32]`) was caused by ChromaDB holding connections open between requests — fixed by sharing one vectorstore instance initialized at startup.
 - **A PDF text-extraction bug** silently broke words across line boundaries (`"Assessm\nent"` instead of `"Assessment"`) — fixed with a cleanup regex before chunking, discovered while diagnosing weak cross-encoder scores.
+- **Repeating page headers/footers quietly pollute every chunk** on documents with a fixed page template — fixed by stripping the repeating pattern before chunking, discovered while diagnosing why a chunk containing the correct answer was consistently ranked lower than it should have been.
+- **A correct, retrieved chunk can still miss the final answer if the re-rank cutoff is too tight** — found by tracing a specific failed answer back to its source chunk, confirming it was retrieved and correctly scored as relevant, just one rank outside the cutoff.
+- **Plain text extraction scrambles tabular data** — column/row relationships are lost when a table is flattened into a single text stream; switching to structure-aware extraction (tables handled separately from prose, converted to markdown) fixed retrieval and answer accuracy on table-based questions.
 - **Re-ranking scores are phrasing-sensitive** — the same chunk scored -9.8 for a casually-phrased question and +3.3 for a more document-aligned phrasing, showing query rewriting and re-ranking are not independent stages.
 - **Chunk ordering in the context window affects correctness, not just retrieval quality** — the same three retrieved chunks, in a different order, flipped a correct answer into an incorrect "not covered" response (a real, observed instance of LLM position bias / "lost in the middle").
 - **Binary groundedness checks can penalize honesty** — an answer that correctly hedged on missing information was wrongly flagged as unsupported by a binary verifier; three-way classification fixed this.

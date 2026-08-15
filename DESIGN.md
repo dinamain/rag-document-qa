@@ -35,11 +35,11 @@ PDF ingestion (pdfplumber, table-aware)
 
 ## Testing Evidence
 
-Built an automated eval harness (`eval_test.py`) covering both directions of correctness:
-- 3 questions the specs **should** answer (AMF functional role, standardised SST values from a table, PDU Session types)
-- 3 questions the specs **should not** answer, including two deliberately tricky edge cases where tangentially related content exists but doesn't actually answer the question (4G LTE handover — only EPS/5GC interworking content exists; Wi-Fi 6 vs 5G latency — real 5G latency content exists but no Wi-Fi 6 comparison)
+Built an automated eval harness (`eval_test.py`) covering both directions of correctness across 12 questions:
+- 6 questions the specs **should** answer: AMF functional role, standardised SST values from a table, PDU Session definition and types, SMF functional role, S-NSSAI definition, and PDU Session Establishment Request contents
+- 6 questions the specs **should not** answer, including several deliberately tricky edge cases where tangentially related content exists but doesn't actually answer the question: 4G LTE handover (only EPS/5GC interworking content exists), 5G data plan pricing (no related content at all), Wi-Fi 6 vs 5G latency (real 5G latency content exists but no Wi-Fi 6 comparison), maximum base station transmit power (hardware/RF detail outside these procedural specs), and exact AMF-gNB IP addressing (interfaces are discussed extensively, but not this level of detail)
 
-**Result: 6/6 passing.** The system answered correctly and cited sources on all three "should answer" cases, and correctly refused without fabricating information on all three "should refuse" cases, including both trick cases.
+**Result: 12/12 passing.** The system answered correctly and cited sources on all six "should answer" cases, and correctly refused without fabricating information on all six "should refuse" cases, including every trick case.
 
 ## Known Limitations
 

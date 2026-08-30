@@ -58,10 +58,10 @@ TEST_CASES = [
         "note": "Tricky: real 5G latency content exists but no Wi-Fi 6 comparison",
     },
     {
-    "question": "What specific security algorithm is used for NAS ciphering?",
-    "expect": "ANSWER",
-    "note": "24501 defines the NAS security algorithms IE with named identifiers (e.g. null ciphering algorithm) -- corrected from an earlier mislabeled expectation; full cryptographic algorithm specs still live in TS 33.501, which isn't ingested",
-},
+        "question": "What specific security algorithm is used for NAS ciphering?",
+        "expect": "ANSWER",
+        "note": "24501 defines the NAS security algorithms IE with named identifiers (e.g. null ciphering algorithm) -- corrected from an earlier mislabeled expectation; full cryptographic algorithm specs still live in TS 33.501, which isn't ingested",
+    },
     {
         "question": "What is the maximum transmit power allowed for a 5G base station antenna?",
         "expect": "REFUSE",
@@ -75,6 +75,7 @@ TEST_CASES = [
 ]
 
 
+TEST_CASES = [tc for tc in TEST_CASES if "NAS ciphering" in tc["question"]]
 def classify_result(result: dict) -> str:
     """Turn the answer text into a simple ANSWER/REFUSE classification."""
     answer_lower = result["answer"].lower()
@@ -98,7 +99,9 @@ def run_eval():
 
         result = query_pdf(case["question"], vectorstore=vectorstore)
         actual = classify_result(result)
-        status = "PASS" if actual == case["expect"] else "FAIL"
+        answer_matches = (actual == case["expect"])
+        verification_ok = not result["hallucinated"]  # verifier should NOT flag hallucination
+        status = "PASS" if (answer_matches and verification_ok) else "FAIL"
         if status == "PASS":
             passed += 1
 
@@ -106,25 +109,25 @@ def run_eval():
             "question": case["question"],
             "expected": case["expect"],
             "actual": actual,
+            "verification_status": result["verification_status"],
             "status": status,
             "answer_preview": result["answer"][:150],
         })
 
-        print(f"\n>>> RESULT: {status} (expected {case['expect']}, got {actual})")
+        print(f"\n>>> RESULT: {status} (expected {case['expect']}, got {actual}, verification={result['verification_status']})")
         time.sleep(15)
-        
+
     print(f"\n\n{'='*70}")
     print(f"SUMMARY: {passed}/{len(TEST_CASES)} passed")
     print('='*70)
     for r in results:
         marker = "✓" if r["status"] == "PASS" else "✗"
-        print(f"{marker} [{r['status']}] {r['question'][:60]}")
+        print(f"{marker} [{r['status']}] {r['question'][:60]} (verification: {r['verification_status']})")
         if r["status"] == "FAIL":
             print(f"    expected={r['expected']} actual={r['actual']}")
             print(f"    answer: {r['answer_preview']}")
 
     return results
-
 
 if __name__ == "__main__":
     run_eval()

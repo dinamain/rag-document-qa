@@ -15,7 +15,7 @@ Most LLMs don't know what's in your private documents. This system solves that u
 
 1. **Upload a PDF** — the document is extracted (prose and tables handled separately), chunked, and stored as vector embeddings in ChromaDB
 2. **Ask a question** — your question is embedded and compared against stored chunks using semantic similarity search
-3. **Get an answer** — the most relevant chunks are retrieved and sent to Groq (Llama 3.1) which generates an accurate answer with source citation
+3. **Get an answer** — the most relevant chunks are retrieved and sent to Groq (`openai/gpt-oss-20b`) which generates an accurate answer with source citation
 
 The LLM never sees the whole document — only the most relevant sections. This keeps answers focused and grounded.
 
@@ -44,8 +44,12 @@ User Question
       retrieval is the current path
   ↓ Cross-encoder re-ranking (FastEmbed ONNX, Xenova/ms-marco-MiniLM-L-6-v2) — re-score against ORIGINAL question, top 8
   ↓ LangChain prompt template — build strict, grounded context prompt
-  ↓ Groq (Llama 3.1-8b-instant) — generate answer with source citation
-  ↓ Answer verification (LLM) — three-way check: fully supported / honestly partial / unsupported
+  ↓ Groq (openai/gpt-oss-20b) — generate answer with source citation
+  ↓ Answer verification (LLM) — three-way check: fully supported / honestly
+      partial / unsupported. Skipped when the answer is the exact controlled
+      refusal sentinel ("This topic is not covered in the document."), since
+      that's a deterministic non-claim rather than a factual assertion —
+      see Key Design Decisions for why this exception exists.
 ```
 
 ---
@@ -59,7 +63,7 @@ User Question
 | Vector Database | ChromaDB |
 | Embeddings | FastEmbed (BAAI/bge-small-en-v1.5, ONNX runtime) |
 | Re-ranking | FastEmbed (Xenova/ms-marco-MiniLM-L-6-v2, ONNX runtime) |
-| LLM | Groq (Llama 3.1-8b-instant) |
+| LLM | Groq (`openai/gpt-oss-20b`) |
 | Backend API | FastAPI |
 | Frontend | React |
 | Containerisation | Docker Compose |
@@ -74,6 +78,7 @@ rag-document-qa/
 ├── ingest.py                  # PDF ingestion: extract (prose + tables), clean, chunk, header, embed, store
 ├── query.py                   # Query pipeline: rewrite, retrieve, re-rank, generate, verify
 ├── main.py                    # FastAPI backend (POST /upload, POST /ask)
+├── eval_test.py                # Automated eval harness (12 questions, checks answer + verification status)
 ├── test_ingest.py             # Manual ingestion test script
 ├── test_query.py              # Manual query test script
 ├── ab_test.py                 # A/B comparison scripts (e.g. query rewriting on/off)
@@ -176,6 +181,12 @@ The LLM was trained on public data; it has never seen your private PDFs. RAG ret
 **Why Groq instead of a local model for deployment?**
 Local models are great for development but need a GPU-backed server to run in production. Groq provides fast, free LLM inference via API without hosting a model.
 
+**Why migrate from `llama-3.1-8b-instant` to `openai/gpt-oss-20b` mid-project?**
+Groq deprecated `llama-3.1-8b-instant` during development, forcing a mid-project model swap. This surfaced a real regression: the verification step started incorrectly flagging every correct "not covered" refusal as an unsupported hallucination, because the new model's judgment on refusals was miscalibrated — it tended to treat any loosely-related content in the context as proof the topic was "covered," even when that content didn't actually answer the question. Fixed by skipping verification entirely for the exact controlled refusal sentinel (see below), since a deterministic refusal isn't a factual claim to check in the first place.
+
+**Why skip verification for the exact "not covered" sentinel string?**
+A literal, controlled refusal ("This topic is not covered in the document.") makes no factual assertion — there's nothing in it to check against the context. Running it through the verifier anyway (as the pipeline originally did) meant the verifier was effectively being asked "is the absence of an answer supported by the context," a category error that a stricter model answered inconsistently and often incorrectly. Detecting the exact sentinel and skipping verification for it removes that entire failure mode.
+
 **Why `langchain_chroma` instead of `langchain_community.vectorstores.Chroma`?**
 The community package is deprecated and has connection lifecycle bugs on Windows — it doesn't release SQLite file locks cleanly between requests. Migrating resolved persistent `PermissionError: [WinError 32]` errors on upload.
 
@@ -224,6 +235,8 @@ Pure vector similarity is comparatively weak at exact lexical matches — proper
 - **LLM sampling non-determinism affects retrieval, not just wording** — identical questions produced different rewritten queries, different retrieved chunks, and different final answers, until `temperature=0` was applied across the pipeline.
 - **A technique can work correctly and still be the wrong choice for the deployment target** — hybrid search measurably improved retrieval ranking in isolation, but a different part of the pipeline (wide candidate pool + re-ranking) was already absorbing the gap it closed, and it cost more memory than the free tier allowed. Building and testing a feature is a separate question from whether it earns its keep in production.
 - **Every added pipeline stage has a resource cost somewhere, not just a speed one** — hybrid search, re-ranking, and running two ONNX models simultaneously each add real memory or latency overhead; a technique being correct doesn't mean it's free to deploy.
+- **A provider deprecating a model mid-project can silently change more than availability** — swapping `llama-3.1-8b-instant` for `openai/gpt-oss-20b` after Groq's deprecation didn't just require a model-string change; the new model's judgment calibration on the verification task was measurably different, and it took a full eval re-run to catch.
+- **Not every generation flaw is fixable by prompting alone** — a specific model behavior (dropping conditional/qualifying language when stating a fact) persisted even after an explicit prompt instruction and a higher reasoning-effort setting. Documenting a known, understood limitation honestly is preferable to claiming a fix that doesn't actually work.
 
 ---
 
@@ -234,6 +247,8 @@ Pure vector similarity is comparatively weak at exact lexical matches — proper
 **BM25 index (when reintroduced) would be rebuilt on every query, not persisted.** The hybrid search implementation (recoverable from git history) called `vectorstore.get(...)` to pull all matching chunks from ChromaDB and rebuild an in-memory `BM25Retriever` from scratch on every single query. This is fine at portfolio scale (tens of chunks per document) but would not hold up at real scale — at 100k+ documents, re-fetching and re-tokenizing the entire corpus per query becomes a real bottleneck. The fix: cache the BM25 index in memory at startup and only rebuild it on ingestion, not on every query. At genuine production scale, this would be replaced with a disk-persisted, incrementally-updatable keyword search engine (Elasticsearch, OpenSearch) rather than an in-memory rebuild.
 
 **Non-transactional ingestion.** Re-ingesting a document deletes its existing chunks before confirming the new ones have loaded successfully — an ingestion crash mid-re-ingest can leave a document's chunks permanently missing. A production version would stage new chunks, verify them, then delete the old ones only after the new ones are confirmed.
+
+**A specific, reproducible overclaim on one question, tied to the current LLM.** When asked what security algorithm is used for NAS ciphering, `openai/gpt-oss-20b` consistently states the null ciphering algorithm (5G-EA0) as an unconditional fact, even though the source material presents it as conditional ("used only when configured by the AMF"). An explicit prompt instruction to preserve conditional language, and increasing `reasoning_effort` from low to medium, both failed to fix this. The verification layer correctly and consistently flags this specific answer as unsupported, which is the system working as designed — the residual issue is in generation, not detection.
 
 ---
 

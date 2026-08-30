@@ -87,15 +87,27 @@ ANSWER:
     status_line = text.lower().split("reason:")[0]
     is_hallucination = "unsupported" in status_line and "partially" not in status_line
 
-    return {"hallucinated": is_hallucination, "raw": text}
+    # Parse the actual status label for downstream use (eval harness, etc.)
+    status_label = "UNKNOWN"
+    for candidate in ["FULLY_SUPPORTED", "PARTIALLY_SUPPORTED_AND_HONEST", "UNSUPPORTED"]:
+        if candidate.lower() in status_line:
+            status_label = candidate
+            break
 
+    return {"hallucinated": is_hallucination, "raw": text, "status": status_label}
 
 def query_pdf(question: str, vectorstore=None, filename: str = None):
     if vectorstore is None:
         embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
         vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
 
-    llm = ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"), temperature=0)
+    llm = ChatGroq(
+    model="openai/gpt-oss-20b",
+    api_key=os.getenv("GROQ_API_KEY"),
+    temperature=0,
+    reasoning_effort="medium",   # bumped from low -- low wasn't reliably preserving conditional/qualifier language
+    model_kwargs={"include_reasoning": False}
+)
 
     rewritten_question = rewrite_query(question, llm)
     print(f"Original: {question}")
@@ -142,6 +154,7 @@ Rules:
 - If the context contains no relevant information at all, say exactly: "This topic is not covered in the document."
 - Do NOT infer, assume, or use outside knowledge
 - Do NOT speculate about what the document might say elsewhere
+- Preserve any conditions, qualifiers, or exceptions stated in the context (e.g. "only when X", "unless Y") -- do not state something as an unconditional fact if the context presents it as conditional or optional
 
 Context:
 {context}
@@ -152,7 +165,20 @@ Answer:"""
 
     answer = llm.invoke(prompt)
 
-    verification = verify_answer(question, context, answer.content, llm)
+    NOT_COVERED_SENTINEL = "This topic is not covered in the document."
+    if answer.content.strip() == NOT_COVERED_SENTINEL:
+        # A literal refusal is a deterministic non-claim, not a factual
+        # assertion -- nothing to verify, so skip the verification LLM
+        # call entirely rather than let it (sometimes incorrectly) judge
+        # a refusal as if it were an unsupported claim.
+        verification = {
+            "hallucinated": False,
+            "raw": "SKIPPED: exact refusal sentinel matched -- no claims to verify.",
+            "status": "FULLY_SUPPORTED",
+        }
+    else:
+        verification = verify_answer(question, context, answer.content, llm)
+
     print(f"\n--- VERIFICATION ---\n{verification['raw']}")
 
     final_answer = answer.content
@@ -167,4 +193,9 @@ Answer:"""
         for chunk in relevant_chunks[:3]
     ]
 
-    return {"answer": final_answer, "sources": sources}
+    return {
+        "answer": final_answer,
+        "sources": sources,
+        "verification_status": verification["status"],
+        "hallucinated": verification["hallucinated"],
+    }

@@ -19,3 +19,4 @@ frontend/build/
 
 # OS
 .DS_Store
+*.tar

@@ -77,9 +77,13 @@ TEST_CASES = [
 
 
 def classify_result(result: dict) -> str:
-    """Turn the answer text into a simple ANSWER/REFUSE classification."""
-    answer_lower = result["answer"].lower()
-    if "not covered in the document" in answer_lower and len(result["answer"]) < 200:
+    """Turn the answer into ANSWER / REFUSE / EMPTY."""
+    if result["verification_status"] == "EMPTY_RESPONSE":
+        return "EMPTY"
+    core = result["answer"].split("⚠️ Note:")[0].strip()
+    if not core:
+        return "EMPTY"
+    if "not covered in the document" in core.lower() and len(core) < 200:
         return "REFUSE"
     return "ANSWER"
 

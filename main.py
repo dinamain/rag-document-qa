@@ -37,7 +37,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     temp_path = f"./{file.filename}"
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    ingest_pdf(temp_path, vectorstore=vectorstore)
+    ingest_pdf(temp_path)
     os.remove(temp_path)
     return {"message": f"{file.filename} ingested successfully"}
 

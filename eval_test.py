@@ -75,7 +75,7 @@ TEST_CASES = [
 ]
 
 
-TEST_CASES = [tc for tc in TEST_CASES if "NAS ciphering" in tc["question"]]
+
 def classify_result(result: dict) -> str:
     """Turn the answer text into a simple ANSWER/REFUSE classification."""
     answer_lower = result["answer"].lower()
